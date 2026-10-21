@@ -42,6 +42,11 @@ res/
 .appblink/
 .claude/
 .vscode/
+.github/
+META-INF/
+kotlin/
+kotlin-tooling-metadata.json
 
 # Local database files
 **/data/*.json
+

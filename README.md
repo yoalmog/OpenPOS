@@ -71,12 +71,32 @@ npm start
 ```
 Open **`http://localhost:3000`** in your browser.
 
-### Deploy to Vercel (Free)
-1. Import this repository in [Vercel](https://vercel.com/new).
-2. Set **Root Directory** to `OpenPOS-Backoffice`.
-3. Click **Deploy** to obtain your free live HTTPS URL (e.g., `https://openpos-backoffice.vercel.app`).
-4. Enter this URL into your Android app under **Settings ⚙️ -> Back Office URL** and tap **Sync Now**!
+### Local Web Routes
 
+Run from the repository root:
+
+```bash
+npm install
+npm start
+```
+
+Open these routes locally:
+
+* **Back Office:** `http://localhost:3000/`
+* **Customer Storefront:** `http://localhost:3000/order`
+* **Fullscreen Kitchen Display (KDS):** `http://localhost:3000/kitchen`
+
+### Deploy to Vercel
+
+The repository is configured for deployment from the **repository root** using the root-level `vercel.json`. In the Vercel project settings, set **Root Directory** to the repository root (not `OpenPOS-Backoffice`) and deploy the `main` branch.
+
+Production routes:
+
+* **Back Office:** `https://openpos-liart.vercel.app/`
+* **Customer Storefront:** `https://openpos-liart.vercel.app/order`
+* **Fullscreen Kitchen Display (KDS):** `https://openpos-liart.vercel.app/kitchen`
+
+The root `vercel.json` routes `/order` and `/kitchen` to their dedicated HTML pages, and forwards `/api/*` to the serverless API. After pushing changes to `main`, confirm that Vercel has created a new Production deployment and test all three routes.
 ---
 
 ## 📄 License

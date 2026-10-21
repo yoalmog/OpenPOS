@@ -17,35 +17,35 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Decompiled & Reverse Engineering Files (Loyverse Original Sample)
-*.dex
-*.apk
-*.bin
-*.properties
-*.proto
-resources.arsc
-AndroidManifest.xml
-androidsupportmultidexversion.txt
-DebugProbesKt.bin
-skills-lock.json
-ExploitGPT/
-assets/
-certificates/
-com/
-firebase/
-google/
-lib/
-okhttp3/
-org/
-res/
-.agents/
-.appblink/
-.claude/
-.vscode/
-.github/
-META-INF/
-kotlin/
-kotlin-tooling-metadata.json
+# Decompiled & Reverse Engineering Files (Loyverse Original Sample in root)
+/*.dex
+/*.apk
+/*.bin
+/*.properties
+/*.proto
+/resources.arsc
+/AndroidManifest.xml
+/androidsupportmultidexversion.txt
+/DebugProbesKt.bin
+/skills-lock.json
+/ExploitGPT/
+/assets/
+/certificates/
+/com/
+/firebase/
+/google/
+/lib/
+/okhttp3/
+/org/
+/res/
+/.agents/
+/.appblink/
+/.claude/
+/.vscode/
+/.github/
+/META-INF/
+/kotlin/
+/kotlin-tooling-metadata.json
 
 # Local database files
 **/data/*.json

@@ -1,0 +1,16 @@
+{
+  "name": "openpos",
+  "version": "1.0.0",
+  "description": "OpenPOS - Point of Sale & Back Office",
+  "main": "OpenPOS-Backoffice/server.js",
+  "scripts": {
+    "start": "node OpenPOS-Backoffice/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

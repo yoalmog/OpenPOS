@@ -27,7 +27,9 @@ class PosRepository private constructor(context: Context? = null) {
             syncServerUrl = prefs?.getString("sync_server_url", "http://10.0.2.2:3000") ?: "http://10.0.2.2:3000",
             cashierName = prefs?.getString("cashier_name", "Cashier") ?: "Cashier",
             receiptFooter = prefs?.getString("receipt_footer", "Thank you for your visit!") ?: "Thank you for your visit!",
-            defaultPrinterMac = prefs?.getString("printer_mac", null)
+            defaultPrinterMac = prefs?.getString("printer_mac", null),
+            apiKey = prefs?.getString("api_key", "openpos_sec_key_2026") ?: "openpos_sec_key_2026",
+            managerPin = prefs?.getString("manager_pin", "8888") ?: "8888"
         )
     )
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -42,39 +44,21 @@ class PosRepository private constructor(context: Context? = null) {
             putString("cashier_name", newSettings.cashierName)
             putString("receipt_footer", newSettings.receiptFooter)
             putString("printer_mac", newSettings.defaultPrinterMac)
+            putString("api_key", newSettings.apiKey)
+            putString("manager_pin", newSettings.managerPin)
             apply()
         }
         syncManager?.serverUrl = newSettings.syncServerUrl
+        syncManager?.apiKey = newSettings.apiKey
     }
 
-    // Categories List (Clean - no fake categories)
+    // Categories List
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories.asStateFlow()
 
-    // Items Catalog (Clean - no fake items)
+    // Items Catalog
     private val _items = MutableStateFlow<List<Item>>(emptyList())
     val items: StateFlow<List<Item>> = _items.asStateFlow()
-
-    init {
-        // Load clean data from local database
-        dbHelper?.let { db ->
-            _items.value = db.getAllItems()
-            _categories.value = db.getAllCategories()
-        }
-        syncManager?.serverUrl = _settings.value.syncServerUrl
-    }
-
-    // Active Shift
-    private val _currentShift = MutableStateFlow<Shift?>(
-        Shift(employeeName = "Cashier", startingCash = 0.0)
-    )
-    val currentShift: StateFlow<Shift?> = _currentShift.asStateFlow()
-
-    // Logged-in Employee
-    private val _currentEmployee = MutableStateFlow<Employee>(
-        Employee(name = "Cashier", pin = "1234", role = "Cashier")
-    )
-    val currentEmployee: StateFlow<Employee> = _currentEmployee.asStateFlow()
 
     // Shopping Cart
     private val _cart = MutableStateFlow<List<CartItem>>(emptyList())
@@ -87,6 +71,47 @@ class PosRepository private constructor(context: Context? = null) {
     // Receipts
     private val _receipts = MutableStateFlow<List<Receipt>>(emptyList())
     val receipts: StateFlow<List<Receipt>> = _receipts.asStateFlow()
+
+    // Active Shift
+    private val _currentShift = MutableStateFlow<Shift?>(null)
+    val currentShift: StateFlow<Shift?> = _currentShift.asStateFlow()
+
+    // Logged-in Employee
+    private val _currentEmployee = MutableStateFlow<Employee>(
+        Employee(name = "Cashier", pinHash = sha256("1234"), role = "Cashier")
+    )
+    val currentEmployee: StateFlow<Employee> = _currentEmployee.asStateFlow()
+
+    init {
+        // Load clean data from local SQLite database
+        dbHelper?.let { db ->
+            _items.value = db.getAllItems()
+            _categories.value = db.getAllCategories()
+            _openTickets.value = db.getAllOpenTickets()
+            _receipts.value = db.getAllReceipts()
+            _currentShift.value = db.getActiveShift() ?: Shift(
+                employeeName = _settings.value.cashierName,
+                startingCash = 0.0
+            ).also { db.saveShift(it) }
+        }
+
+        syncManager?.serverUrl = _settings.value.syncServerUrl
+        syncManager?.apiKey = _settings.value.apiKey
+
+        // Setup two-way sync catalog receiver
+        syncManager?.onCatalogReceived = { serverItems, serverCategories ->
+            dbHelper?.let { db ->
+                if (serverCategories.isNotEmpty()) {
+                    serverCategories.forEach { db.saveCategory(it) }
+                    _categories.value = db.getAllCategories()
+                }
+                if (serverItems.isNotEmpty()) {
+                    db.saveItems(serverItems)
+                    _items.value = db.getAllItems()
+                }
+            }
+        }
+    }
 
     fun addNewItem(item: Item) {
         dbHelper?.saveItem(item)
@@ -131,7 +156,8 @@ class PosRepository private constructor(context: Context? = null) {
         _cart.value = emptyList()
     }
 
-    // פעולות על העגלה
+    // --- CART ACTIONS ---
+
     fun addItemToCart(item: Item, modifiers: List<ModifierOption> = emptyList()) {
         _cart.update { current ->
             val existingIndex = current.indexOfFirst {
@@ -174,13 +200,15 @@ class PosRepository private constructor(context: Context? = null) {
         _cart.value = emptyList()
     }
 
-    // ניהול חשבונות פתוחים
+    // --- OPEN TICKETS (PERSISTED IN SQLITE) ---
+
     fun saveCartAsOpenTicket(name: String): Boolean {
         if (_cart.value.isEmpty()) return false
         val ticket = OpenTicket(
-            name = name.ifBlank { "חשבון ${_openTickets.value.size + 1}" },
+            name = name.ifBlank { "Ticket #${_openTickets.value.size + 1}" },
             items = _cart.value
         )
+        dbHelper?.saveOpenTicket(ticket)
         _openTickets.update { it + ticket }
         clearCart()
         return true
@@ -188,12 +216,14 @@ class PosRepository private constructor(context: Context? = null) {
 
     fun loadOpenTicket(ticketId: String): Boolean {
         val ticket = _openTickets.value.find { it.id == ticketId } ?: return false
+        dbHelper?.deleteOpenTicket(ticketId)
         _cart.value = ticket.items
         _openTickets.update { it.filterNot { t -> t.id == ticketId } }
         return true
     }
 
-    // תשלום וסיום עסקה
+    // --- CHECKOUT WITH AUTOMATIC INVENTORY DECREMENT & SHIFT TRACKING ---
+
     fun checkout(payments: List<PaymentRecord>, customerName: String? = null): Receipt? {
         val currentItems = _cart.value
         if (currentItems.isEmpty()) return null
@@ -204,22 +234,24 @@ class PosRepository private constructor(context: Context? = null) {
             subtotal = subtotal,
             taxRate = _settings.value.taxRatePercent / 100.0,
             payments = payments,
-            employeeName = _settings.value.cashierName,
+            employeeName = _currentEmployee.value.name,
             customerName = customerName
         )
 
-        // 1. שמירה במסד נתונים מקומי
-        dbHelper?.insertReceipt(receipt)
+        // 1. Automatic Stock Decrement on Checkout
+        dbHelper?.let { db ->
+            currentItems.forEach { cartItem ->
+                db.deductStock(cartItem.item.id, cartItem.quantity, "SALE: ${receipt.id}")
+            }
+            // 2. Persist full receipt & enqueue delta sync event
+            db.insertReceipt(receipt)
+            // Reload updated stock
+            _items.value = db.getAllItems()
+        }
 
-        // 2. עדכון תור סנכרון ענן
-        syncManager?.updatePendingCount()
-
-        // 3. עדכון זכרון מקומי
-        _receipts.update { listOf(receipt) + it }
-
-        // 4. עדכון נתוני משמרת
+        // 3. Update active shift in memory & SQLite
         _currentShift.update { shift ->
-            shift?.let {
+            val updated = shift?.let {
                 val cashSum = payments.filter { p -> p.type == PaymentType.CASH }.sumOf { p -> p.amount }
                 val cardSum = payments.filter { p -> p.type == PaymentType.CARD }.sumOf { p -> p.amount }
                 it.copy(
@@ -227,19 +259,100 @@ class PosRepository private constructor(context: Context? = null) {
                     cardPayments = it.cardPayments + cardSum
                 )
             }
+            updated?.let { dbHelper?.saveShift(it) }
+            updated
         }
+
+        // 4. Update in-memory receipts
+        _receipts.update { listOf(receipt) + it }
+
+        // 5. Trigger cloud sync (reliable delta)
+        syncManager?.updatePendingCount()
+        syncManager?.triggerSync()
 
         clearCart()
         return receipt
     }
 
-    // זיכוי עסקה
+    // --- FULL REFUND & AUTOMATIC INVENTORY RESTORATION ---
+
     fun refundReceipt(receiptId: String): Boolean {
-        val receipt = _receipts.value.find { it.id == receiptId } ?: return false
-        _currentShift.update { shift ->
-            shift?.copy(totalRefunds = shift.totalRefunds + receipt.grandTotal)
+        val original = _receipts.value.find { it.id == receiptId } ?: return false
+        if (original.isRefund) return false // Prevent double refund
+
+        val refundReceipt = Receipt(
+            id = "REF-${System.currentTimeMillis() % 100000}",
+            timestamp = System.currentTimeMillis(),
+            items = original.items,
+            subtotal = -original.subtotal,
+            taxRate = original.taxRate,
+            payments = original.payments.map { it.copy(amount = -it.amount) },
+            employeeName = _currentEmployee.value.name,
+            customerName = original.customerName,
+            ticketNote = "Refund for ${original.id}",
+            isRefund = true,
+            originalReceiptId = original.id
+        )
+
+        // 1. Restore Stock in DB
+        dbHelper?.let { db ->
+            original.items.forEach { cartItem ->
+                db.restoreStock(cartItem.item.id, cartItem.quantity, "REFUND: ${original.id}")
+            }
+            // 2. Persist refund receipt & enqueue sync
+            db.insertReceipt(refundReceipt)
+            _items.value = db.getAllItems()
         }
+
+        // 3. Update shift in memory and DB
+        _currentShift.update { shift ->
+            val updated = shift?.copy(totalRefunds = shift.totalRefunds + original.grandTotal)
+            updated?.let { dbHelper?.saveShift(it) }
+            updated
+        }
+
+        // 4. Update receipts list
+        _receipts.update { listOf(refundReceipt) + it }
+
+        // 5. Trigger cloud sync
+        syncManager?.updatePendingCount()
+        syncManager?.triggerSync()
+
         return true
+    }
+
+    // --- SHIFT MANAGEMENT (START / CLOSE / Z-REPORT) ---
+
+    fun startNewShift(startingCash: Double): Shift {
+        val newShift = Shift(
+            employeeName = _currentEmployee.value.name,
+            startingCash = startingCash
+        )
+        dbHelper?.saveShift(newShift)
+        _currentShift.value = newShift
+        return newShift
+    }
+
+    fun closeActiveShift(actualClosingCash: Double): Shift? {
+        val closed = dbHelper?.closeActiveShift(actualClosingCash)
+        _currentShift.value = null
+        return closed
+    }
+
+    // --- SECURE EMPLOYEE LOGIN ---
+
+    fun verifyPin(pin: String): Employee? {
+        val emp = dbHelper?.getEmployeeByPin(pin)
+        if (emp != null) return emp
+        // Fallback check against manager PIN in settings
+        if (pin == _settings.value.managerPin) {
+            return Employee(name = "Manager", pinHash = sha256(pin), role = "Manager")
+        }
+        return null
+    }
+
+    fun switchEmployee(employee: Employee) {
+        _currentEmployee.value = employee
     }
 
     fun resetAllData() {
@@ -263,7 +376,6 @@ class PosRepository private constructor(context: Context? = null) {
             }
         }
 
-        // גישה מהירה עם fallback
         val instance: PosRepository
             get() = INSTANCE ?: PosRepository(null).also { INSTANCE = it }
     }

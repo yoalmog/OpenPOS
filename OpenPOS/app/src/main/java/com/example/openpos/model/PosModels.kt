@@ -1,5 +1,6 @@
 package com.example.openpos.model
 
+import java.security.MessageDigest
 import java.util.UUID
 
 data class Category(
@@ -42,6 +43,11 @@ data class CartItem(
         }
 }
 
+fun sha256(input: String): String {
+    val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it) }
+}
+
 enum class PaymentType(val displayName: String) {
     CASH("מזומן"),
     CARD("אשראי"),
@@ -58,16 +64,18 @@ data class Receipt(
     val timestamp: Long = System.currentTimeMillis(),
     val items: List<CartItem>,
     val subtotal: Double,
-    val taxRate: Double = 0.17, // 17% מע"מ לדוגמה
+    val taxRate: Double = 0.17, // e.g. 17% VAT
     val payments: List<PaymentRecord>,
-    val employeeName: String = "עובד ראשי",
+    val employeeName: String = "Cashier",
     val customerName: String? = null,
-    val ticketNote: String? = null
+    val ticketNote: String? = null,
+    val isRefund: Boolean = false,
+    val originalReceiptId: String? = null
 ) {
-    val taxAmount: Double get() = subtotal * taxRate
-    val grandTotal: Double get() = subtotal + taxAmount
-    val totalPaid: Double get() = payments.sumOf { it.amount }
-    val changeAmount: Double get() = (totalPaid - grandTotal).coerceAtLeast(0.0)
+    val taxAmount: Double get() = Math.round(subtotal * taxRate * 100.0) / 100.0
+    val grandTotal: Double get() = Math.round((subtotal + taxAmount) * 100.0) / 100.0
+    val totalPaid: Double get() = Math.round(payments.sumOf { it.amount } * 100.0) / 100.0
+    val changeAmount: Double get() = Math.round((totalPaid - grandTotal).coerceAtLeast(0.0) * 100.0) / 100.0
 }
 
 data class OpenTicket(
@@ -82,16 +90,37 @@ data class Shift(
     val employeeName: String,
     val startTime: Long = System.currentTimeMillis(),
     var endTime: Long? = null,
-    val startingCash: Double = 500.0,
+    val startingCash: Double = 0.0,
     var cashPayments: Double = 0.0,
     var cardPayments: Double = 0.0,
     var totalRefunds: Double = 0.0,
+    var actualClosingCash: Double? = null,
     val isOpen: Boolean = true
-)
+) {
+    val expectedCash: Double get() = Math.round((startingCash + cashPayments - totalRefunds) * 100.0) / 100.0
+    val cashDifference: Double? get() = actualClosingCash?.let { Math.round((it - expectedCash) * 100.0) / 100.0 }
+}
 
 data class Employee(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val pin: String,
-    val role: String = "קופאי"
+    val pinHash: String = sha256("1234"),
+    val role: String = "Cashier"
+)
+
+data class SyncQueueEvent(
+    val id: Long,
+    val eventType: String,
+    val payloadJson: String,
+    val createdAt: Long
+)
+
+data class StockMovement(
+    val id: Long = 0,
+    val itemId: String,
+    val itemName: String,
+    val changeQuantity: Int,
+    val resultingStock: Int,
+    val reason: String,
+    val timestamp: Long = System.currentTimeMillis()
 )

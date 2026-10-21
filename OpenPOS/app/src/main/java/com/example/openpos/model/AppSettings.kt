@@ -7,5 +7,7 @@ data class AppSettings(
     val syncServerUrl: String = "http://10.0.2.2:3000",
     val cashierName: String = "Cashier",
     val receiptFooter: String = "Thank you for your visit!",
-    val defaultPrinterMac: String? = null
+    val defaultPrinterMac: String? = null,
+    val apiKey: String = "openpos_sec_key_2026",
+    val managerPin: String = "8888"
 )

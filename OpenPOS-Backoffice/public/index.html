@@ -92,6 +92,25 @@
         
         <!-- DASHBOARD TAB -->
         <section id="tab-dashboard" class="tab-pane active">
+          <!-- Smart Date Range & Export Toolbar -->
+          <div class="toolbar" style="margin-bottom: 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <label for="statsPeriodSelect" style="font-weight: 600; font-size: 0.875rem;"><i class="fa-solid fa-calendar-days"></i> Analytics Period:</label>
+              <select id="statsPeriodSelect" class="form-select" style="min-width: 140px; padding: 0.4rem 0.75rem;">
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="week">Last 7 Days</option>
+                <option value="month">This Month</option>
+                <option value="all" selected>All Time</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+              <a href="/api/export/receipts" target="_blank" class="btn btn-outline btn-sm">
+                <i class="fa-solid fa-file-csv"></i> Export Sales CSV
+              </a>
+            </div>
+          </div>
+
           <!-- KPI Cards Grid -->
           <div class="kpi-grid">
             <div class="kpi-card">
@@ -199,6 +218,9 @@
               <select id="categoryFilterSelect" class="form-select">
                 <option value="">All Categories</option>
               </select>
+              <a href="/api/export/items" target="_blank" class="btn btn-outline btn-sm">
+                <i class="fa-solid fa-file-csv"></i> Export CSV
+              </a>
               <button class="btn btn-primary" id="openAddProductModalBtn">
                 <i class="fa-solid fa-plus"></i> Add Product
               </button>
@@ -350,6 +372,10 @@
               </div>
               <div class="danger-body">
                 <p>Reset and wipe all products, categories, and sales receipts from the online back office. This cannot be undone.</p>
+                <div style="margin: 1rem 0; max-width: 280px;">
+                  <label for="dangerManagerPin" style="display: block; font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.25rem;">Enter Manager PIN to authorize:</label>
+                  <input type="password" id="dangerManagerPin" class="form-input" placeholder="Manager PIN (default: 8888)">
+                </div>
                 <button class="btn btn-danger" id="resetAllDataBtn">
                   <i class="fa-solid fa-trash-can"></i> Reset & Clear All Data
                 </button>

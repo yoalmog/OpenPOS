@@ -104,8 +104,11 @@ fun PosScreen(
     var showLanguageMenu by remember { mutableStateOf(false) }
     var showAddProductDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showReceiptsDialog by remember { mutableStateOf(false) }
+    var receiptToInspect by remember { mutableStateOf<Receipt?>(null) }
     var itemToDelete by remember { mutableStateOf<Item?>(null) }
     var lastReceipt by remember { mutableStateOf<Receipt?>(null) }
+    val receipts by repository.receipts.collectAsState()
 
     val syncStatus by repository.syncManager?.syncStatus?.collectAsState() ?: remember { mutableStateOf(SyncStatus.SYNCED) }
     val pendingSyncCount by repository.syncManager?.pendingEventsCount?.collectAsState() ?: remember { mutableStateOf(0) }
@@ -151,6 +154,52 @@ fun PosScreen(
                     }
                 },
                 actions = {
+                    // Cloud Sync Indicator Pill (Reliable status & quick sync)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (syncStatus) {
+                            SyncStatus.SYNCED -> Color(0xFFE8F5E9)
+                            SyncStatus.SYNCING -> Color(0xFFE3F2FD)
+                            SyncStatus.OFFLINE -> Color(0xFFFFF3E0)
+                            SyncStatus.ERROR -> Color(0xFFFFEBEE)
+                        },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                coroutineScope.launch {
+                                    repository.syncManager?.triggerSync()
+                                }
+                            }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when (syncStatus) {
+                                            SyncStatus.SYNCED -> Color(0xFF2E7D32)
+                                            SyncStatus.SYNCING -> Color(0xFF1976D2)
+                                            SyncStatus.OFFLINE -> Color(0xFFF57C00)
+                                            SyncStatus.ERROR -> Color(0xFFD32F2F)
+                                        }
+                                    )
+                            )
+                            if (pendingSyncCount > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "$pendingSyncCount",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                            }
+                        }
+                    }
+
                     // Language Switcher Dropdown
                     Box {
                         IconButton(onClick = { showLanguageMenu = true }) {
@@ -200,6 +249,11 @@ fun PosScreen(
                     // Barcode Scanner Action
                     IconButton(onClick = { showBarcodeScannerDialog = true }) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = strings.barcodeScanner)
+                    }
+
+                    // Receipts & Refunds History Action
+                    IconButton(onClick = { showReceiptsDialog = true }) {
+                        Icon(Icons.Default.History, contentDescription = "Receipts & Refunds")
                     }
 
                     // Open Tickets Action
@@ -473,13 +527,50 @@ fun PosScreen(
         )
     }
 
-    // Shift Report Dialog
+    // Receipts & Refunds History Dialog
+    if (showReceiptsDialog) {
+        ReceiptsHistoryDialog(
+            receipts = receipts,
+            currencyFormat = currencyFormat,
+            strings = strings,
+            onDismiss = { showReceiptsDialog = false },
+            onSelectReceipt = { r ->
+                receiptToInspect = r
+            }
+        )
+    }
+
+    // Inspect Past Receipt & Refund Flow
+    receiptToInspect?.let { receipt ->
+        ReceiptDetailsDialog(
+            receipt = receipt,
+            currencyFormat = currencyFormat,
+            strings = strings,
+            isHistoryMode = true,
+            onDismiss = { receiptToInspect = null },
+            onPrintThermal = {
+                lastReceipt = receipt
+                showPrinterSelectionDialog = true
+            },
+            onRefund = {
+                repository.refundReceipt(receipt.id)
+                receiptToInspect = null
+            }
+        )
+    }
+
+    // Shift Report Dialog (with Z-Report Shift Closing)
     if (showShiftDialog) {
         ShiftReportDialog(
             shift = currentShift,
             currencyFormat = currencyFormat,
             strings = strings,
-            onDismiss = { showShiftDialog = false }
+            onDismiss = { showShiftDialog = false },
+            onEndShift = { countedCash ->
+                repository.closeActiveShift(countedCash)
+                repository.startNewShift(0.0)
+                showShiftDialog = false
+            }
         )
     }
 
@@ -515,7 +606,7 @@ fun PosScreen(
         )
     }
 
-    // Receipt Completed Dialog
+    // Receipt Completed Dialog (Fresh Checkout)
     lastReceipt?.let { receipt ->
         ReceiptDetailsDialog(
             receipt = receipt,
@@ -846,21 +937,47 @@ fun ItemCard(
                 .padding(10.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(Color(item.color))
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    item.name,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(Color(item.color))
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        item.name,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = when {
+                        item.stockQuantity <= 0 -> Color(0xFFFFEBEE)
+                        item.stockQuantity <= 5 -> Color(0xFFFFF3E0)
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Text(
+                        text = if (item.stockQuantity <= 0) "0" else "${item.stockQuantity}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            item.stockQuantity <= 0 -> Color(0xFFD32F2F)
+                            item.stockQuantity <= 5 -> Color(0xFFE65100)
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
             }
 
             Row(
@@ -1207,8 +1324,12 @@ fun ShiftReportDialog(
     shift: Shift?,
     currencyFormat: DecimalFormat,
     strings: PosStrings,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEndShift: (actualCash: Double) -> Unit = {}
 ) {
+    var isEndingShift by remember { mutableStateOf(false) }
+    var countedCashText by remember { mutableStateOf("") }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1262,12 +1383,62 @@ fun ShiftReportDialog(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+
+                    if (isEndingShift) {
+                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        Text("Counted Cash in Drawer:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        OutlinedTextField(
+                            value = countedCashText,
+                            onValueChange = { countedCashText = it },
+                            placeholder = { Text("0.00") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        val counted = countedCashText.toDoubleOrNull() ?: 0.0
+                        val diff = counted - expectedCashInDrawer
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                            Text("Cash Over / Short:", fontWeight = FontWeight.Bold)
+                            Text(
+                                (if (diff > 0) "+" else "") + currencyFormat.format(diff),
+                                fontWeight = FontWeight.Bold,
+                                color = when {
+                                    diff == 0.0 -> Color(0xFF2E7D32)
+                                    diff < 0.0 -> MaterialTheme.colorScheme.error
+                                    else -> Color(0xFF1976D2)
+                                }
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
-                Text(strings.close)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (shift != null) {
+                    if (!isEndingShift) {
+                        OutlinedButton(
+                            onClick = { isEndingShift = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("End Shift (Z-Report)")
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                val counted = countedCashText.toDoubleOrNull() ?: 0.0
+                                onEndShift(counted)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Finalize Z-Report")
+                        }
+                    }
+                }
+                Button(onClick = onDismiss) {
+                    Text(strings.close)
+                }
             }
         }
     )
@@ -1390,20 +1561,136 @@ fun PaymentDialog(
 }
 
 @Composable
+fun ReceiptsHistoryDialog(
+    receipts: List<Receipt>,
+    currencyFormat: DecimalFormat,
+    strings: PosStrings,
+    onDismiss: () -> Unit,
+    onSelectReceipt: (Receipt) -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredReceipts = remember(searchQuery, receipts) {
+        if (searchQuery.isBlank()) receipts
+        else receipts.filter {
+            it.id.contains(searchQuery, ignoreCase = true) ||
+            (it.customerName?.contains(searchQuery, ignoreCase = true) == true) ||
+            it.employeeName.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("Receipts & Transactions (${receipts.size})", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search by receipt # or customer...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                if (filteredReceipts.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("No receipts found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredReceipts) { r ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (r.isRefund) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelectReceipt(r) }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(r.id, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            if (r.isRefund) {
+                                                Spacer(Modifier.width(6.dp))
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = MaterialTheme.colorScheme.error
+                                                ) {
+                                                    Text(
+                                                        "REFUND",
+                                                        color = Color.White,
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        val dateStr = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm").format(r.timestamp)
+                                        Text("$dateStr • ${r.employeeName}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("${r.items.sumOf { it.quantity }} items", fontSize = 11.sp)
+                                    }
+                                    Text(
+                                        currencyFormat.format(r.grandTotal),
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (r.isRefund) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings.close)
+            }
+        }
+    )
+}
+
+@Composable
 fun ReceiptDetailsDialog(
     receipt: Receipt,
     currencyFormat: DecimalFormat,
     strings: PosStrings,
     onDismiss: () -> Unit,
-    onPrintThermal: () -> Unit = {}
+    onPrintThermal: () -> Unit = {},
+    isHistoryMode: Boolean = false,
+    onRefund: () -> Unit = {}
 ) {
+    var showRefundConfirm by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF2E7D32))
+                Icon(
+                    if (receipt.isRefund) Icons.Default.Warning else Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = if (receipt.isRefund) MaterialTheme.colorScheme.error else Color(0xFF2E7D32)
+                )
                 Spacer(Modifier.width(8.dp))
-                Text(strings.receiptCompleteTitle)
+                Text(if (receipt.isRefund) "Refund Transaction" else strings.receiptCompleteTitle)
             }
         },
         text = {
@@ -1411,9 +1698,28 @@ fun ReceiptDetailsDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                if (receipt.isRefund) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "REFUNDED / CREDIT VOUCHER",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(8.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
                 Text("${strings.receiptNumber} ${receipt.id}", fontWeight = FontWeight.Bold)
                 Text("${strings.dateAndTime} ${java.text.SimpleDateFormat("dd/MM/yyyy HH:mm").format(receipt.timestamp)}")
                 Text("${strings.cashierLabel} ${receipt.employeeName}")
+                receipt.customerName?.let { Text("Customer: $it") }
+                receipt.originalReceiptId?.let { Text("Original Receipt: $it", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary) }
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
                 receipt.items.forEach { item ->
@@ -1447,6 +1753,14 @@ fun ReceiptDetailsDialog(
         },
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isHistoryMode && !receipt.isRefund) {
+                    Button(
+                        onClick = { showRefundConfirm = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Refund")
+                    }
+                }
                 OutlinedButton(onClick = onPrintThermal) {
                     Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
@@ -1458,6 +1772,30 @@ fun ReceiptDetailsDialog(
             }
         }
     )
+
+    if (showRefundConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRefundConfirm = false },
+            title = { Text("Confirm Refund") },
+            text = { Text("Are you sure you want to refund receipt ${receipt.id}? This will restore all items into stock and record the refund.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRefund()
+                        showRefundConfirm = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Confirm Refund")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRefundConfirm = false }) {
+                    Text(strings.cancel)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1540,9 +1878,13 @@ fun SettingsDialog(
     var taxRate by remember { mutableStateOf(settings.taxRatePercent.toString()) }
     var currencySymbol by remember { mutableStateOf(settings.currencySymbol) }
     var syncUrl by remember { mutableStateOf(settings.syncServerUrl) }
+    var apiKey by remember { mutableStateOf(settings.apiKey) }
+    var managerPin by remember { mutableStateOf(settings.managerPin) }
     var cashierName by remember { mutableStateOf(settings.cashierName) }
     var receiptFooter by remember { mutableStateOf(settings.receiptFooter) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    var enteredPin by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf(false) }
 
     val quickCurrencies = listOf("$", "₪", "€", "£", "₹", "¥")
 
@@ -1659,8 +2001,31 @@ fun SettingsDialog(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         supportingText = {
-                            Text("e.g. http://10.0.2.2:3000 (emulator) or LAN IP http://192.168.1.X:3000")
+                            Text("e.g. https://openpos-liart.vercel.app or local IP")
                         }
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        label = { Text("Cloud API Security Key (x-api-key)") },
+                        leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = managerPin,
+                        onValueChange = { managerPin = it },
+                        label = { Text("Manager PIN (for reset & admin actions)") },
+                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
                     )
                 }
 
@@ -1737,7 +2102,11 @@ fun SettingsDialog(
 
                 item {
                     Button(
-                        onClick = { showResetConfirm = true },
+                        onClick = {
+                            enteredPin = ""
+                            pinError = false
+                            showResetConfirm = true
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -1760,7 +2129,9 @@ fun SettingsDialog(
                             currencySymbol = currencySymbol.ifBlank { "$" },
                             syncServerUrl = syncUrl.trim(),
                             cashierName = cashierName.ifBlank { "Cashier" },
-                            receiptFooter = receiptFooter
+                            receiptFooter = receiptFooter,
+                            apiKey = apiKey.trim(),
+                            managerPin = managerPin.trim()
                         )
                     )
                     onDismiss()
@@ -1778,23 +2149,53 @@ fun SettingsDialog(
 
     if (showResetConfirm) {
         AlertDialog(
-            onDismissRequest = { showResetConfirm = false },
+            onDismissRequest = {
+                showResetConfirm = false
+                enteredPin = ""
+                pinError = false
+            },
             title = { Text(strings.resetDatabase) },
-            text = { Text("Are you sure you want to reset and clear all data? This will erase catalog items, categories, receipts, and open tickets permanently.") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Danger: This will erase all catalog items, categories, receipts, and shifts permanently.")
+                    Text("Enter Manager PIN to authorize reset:", fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = enteredPin,
+                        onValueChange = {
+                            enteredPin = it
+                            pinError = false
+                        },
+                        label = { Text("Manager PIN") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        isError = pinError,
+                        supportingText = if (pinError) { { Text("Incorrect Manager PIN", color = MaterialTheme.colorScheme.error) } } else null,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
             confirmButton = {
                 Button(
                     onClick = {
-                        onResetData()
-                        showResetConfirm = false
-                        onDismiss()
+                        if (enteredPin == managerPin) {
+                            onResetData()
+                            showResetConfirm = false
+                            onDismiss()
+                        } else {
+                            pinError = true
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("Confirm Reset")
+                    Text("Authorize & Reset")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showResetConfirm = false }) {
+                TextButton(onClick = {
+                    showResetConfirm = false
+                    enteredPin = ""
+                    pinError = false
+                }) {
                     Text(strings.cancel)
                 }
             }

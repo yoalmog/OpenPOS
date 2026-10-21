@@ -179,9 +179,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function fetchStats() {
+  async function fetchStats(period) {
     try {
-      const res = await fetch('/api/stats');
+      const selectedPeriod = period || (document.getElementById('statsPeriodSelect')?.value) || 'today';
+      const res = await fetch(`/api/stats?period=${encodeURIComponent(selectedPeriod)}`);
       const data = await res.json();
       state.stats = data;
       renderKPIs(data);
@@ -773,15 +774,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Reset Data (Danger Zone)
+  // Period selector change
+  const statsPeriodSelect = document.getElementById('statsPeriodSelect');
+  if (statsPeriodSelect) {
+    statsPeriodSelect.addEventListener('change', () => {
+      fetchStats(statsPeriodSelect.value);
+    });
+  }
+
+  // Reset Data (Danger Zone with Manager PIN)
   document.getElementById('resetAllDataBtn')?.addEventListener('click', async () => {
+    const pinInput = document.getElementById('dangerManagerPin');
+    const managerPin = pinInput ? pinInput.value.trim() : '';
+    if (!managerPin) {
+      showToast('Please enter Manager PIN to authorize reset.', 'error');
+      pinInput?.focus();
+      return;
+    }
     if (confirm('ARE YOU ABSOLUTELY SURE? This will permanently wipe all products, categories, and sales receipts from the online back office!')) {
       try {
-        const res = await fetch('/api/reset', { method: 'POST' });
+        const res = await fetch('/api/reset', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-manager-pin': managerPin
+          },
+          body: JSON.stringify({ managerPin })
+        });
         const data = await res.json();
         if (data.success) {
           showToast('All back office data has been reset to empty state.', 'success');
+          if (pinInput) pinInput.value = '';
           await fetchInitialData();
+        } else {
+          showToast(data.error || 'Reset failed: Unauthorized', 'error');
         }
       } catch (err) {
         showToast('Error resetting data', 'error');

@@ -7,15 +7,19 @@
     },
     {
       "source": "/order",
-      "destination": "/public/order.html"
+      "destination": "/order.html"
+    },
+    {
+      "source": "/order/",
+      "destination": "/order.html"
     },
     {
       "source": "/kitchen",
-      "destination": "/public/kitchen.html"
+      "destination": "/kitchen.html"
     },
     {
-      "source": "/(.*)",
-      "destination": "/public/$1"
+      "source": "/kitchen/",
+      "destination": "/kitchen.html"
     }
   ]
 }

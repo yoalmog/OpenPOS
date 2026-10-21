@@ -23,7 +23,30 @@ data class Item(
     val barcode: String? = null,
     val color: Long = 0xFF2196F3,
     val modifiers: List<ModifierOption> = emptyList(),
-    val stockQuantity: Int = 100
+    val stockQuantity: Int = 100,
+    val station: String = "HOT_KITCHEN",
+    val prepTimeMinutes: Int = 5
+)
+
+enum class KitchenStation(val displayName: String) {
+    COFFEE_BAR("בר קפה"),
+    HOT_KITCHEN("מטבח חם"),
+    SALADS("סלטים והכנות"),
+    DESSERTS("מאפייה וקינוחים"),
+    BAR("בר משקאות")
+}
+
+data class KitchenTicket(
+    val id: String = UUID.randomUUID().toString(),
+    val orderNumber: String,
+    val channel: String = "POS",
+    val tableNumber: String? = null,
+    val customerName: String = "Guest",
+    val station: String = "HOT_KITCHEN",
+    val items: List<String> = emptyList(),
+    val status: String = "PENDING",
+    val createdAt: Long = System.currentTimeMillis(),
+    val targetReadyAt: Long = System.currentTimeMillis() + (5 * 60 * 1000)
 )
 
 data class CartItem(

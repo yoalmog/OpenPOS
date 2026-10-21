@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenPOS | Smart Kitchen Display System (KDS)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root {
+      --kds-bg: #090d16;
+      --kds-header: #111827;
+      --kds-card: #162033;
+      --kds-border: rgba(255, 255, 255, 0.08);
+      --kds-green: #10b981;
+      --kds-orange: #f59e0b;
+      --kds-red: #ef4444;
+      --kds-blue: #3b82f6;
+      --kds-text: #f9fafb;
+      --kds-text-dim: #9ca3af;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      background: var(--kds-bg);
+      color: var(--kds-text);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* KDS Top Bar */
+    .kds-topbar {
+      background: var(--kds-header);
+      border-bottom: 2px solid var(--kds-border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .kds-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .kds-badge {
+      background: linear-gradient(135deg, #ef4444, #f59e0b);
+      color: #fff;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 6px;
+      letter-spacing: 0.05em;
+    }
+
+    .station-filters {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .station-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--kds-border);
+      color: var(--kds-text-dim);
+      padding: 0.45rem 0.9rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.15s;
+    }
+
+    .station-btn:hover, .station-btn.active {
+      background: var(--kds-blue);
+      color: #fff;
+      border-color: var(--kds-blue);
+      box-shadow: 0 0 14px rgba(59, 130, 246, 0.4);
+    }
+
+    .kds-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .kds-stats-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--kds-border);
+      padding: 0.4rem 0.8rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-family: 'JetBrains Mono', monospace;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* KDS Main Ticket Board */
+    .kds-board {
+      flex: 1;
+      padding: 1.25rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.25rem;
+      align-content: start;
+      overflow-y: auto;
+    }
+
+    /* Ticket Card */
+    .kds-ticket {
+      background: var(--kds-card);
+      border: 2px solid var(--kds-border);
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      transition: transform 0.15s;
+    }
+
+    .kds-ticket.urgency-normal { border-color: rgba(16, 185, 129, 0.4); }
+    .kds-ticket.urgency-warning { border-color: rgba(245, 158, 11, 0.7); }
+    .kds-ticket.urgency-danger {
+      border-color: var(--kds-red);
+      animation: alertPulse 1.5s infinite;
+    }
+
+    @keyframes alertPulse {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+      70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .ticket-header {
+      padding: 0.85rem 1rem;
+      background: rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid var(--kds-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .ticket-num {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .ticket-destination {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 0.2rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #cbd5e1;
+    }
+
+    .ticket-timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 1.1rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .timer-normal { color: #10b981; background: rgba(16, 185, 129, 0.15); }
+    .timer-warning { color: #f59e0b; background: rgba(245, 158, 11, 0.15); }
+    .timer-danger { color: #ef4444; background: rgba(239, 68, 68, 0.2); font-weight: 800; }
+
+    .ticket-body {
+      padding: 1rem;
+      flex: 1;
+    }
+
+    .ticket-guest-info {
+      font-size: 0.85rem;
+      color: var(--kds-text-dim);
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .ticket-item-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      cursor: pointer;
+    }
+    .ticket-item-row.struck {
+      opacity: 0.4;
+      text-decoration: line-through;
+    }
+
+    .item-qty-badge {
+      background: #3b82f6;
+      color: #fff;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 1.1rem;
+      min-width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .item-details {
+      flex: 1;
+    }
+
+    .item-name {
+      font-weight: 700;
+      font-size: 1.05rem;
+      color: #fff;
+      margin-bottom: 0.2rem;
+    }
+
+    .item-notes {
+      font-size: 0.85rem;
+      color: #f59e0b;
+      font-weight: 600;
+      background: rgba(245, 158, 11, 0.1);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .ticket-footer {
+      padding: 0.85rem 1rem;
+      background: rgba(0, 0, 0, 0.2);
+      border-top: 1px solid var(--kds-border);
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .kds-btn {
+      flex: 1;
+      padding: 0.75rem;
+      border-radius: 8px;
+      border: none;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      transition: all 0.15s;
+    }
+
+    .btn-prep {
+      background: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+    .btn-prep:hover { background: #f59e0b; color: #000; }
+
+    .btn-ready {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+    }
+    .btn-ready:hover {
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+    }
+
+    .btn-bump {
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+    }
+    .btn-bump:hover { background: rgba(255, 255, 255, 0.15); }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="kds-topbar">
+    <div class="kds-brand">
+      <i class="fa-solid fa-kitchen-set" style="font-size: 1.5rem; color: #10b981;"></i>
+      <div>
+        <h2 style="margin: 0; font-size: 1.2rem; font-weight: 800; font-family: 'Outfit';">OpenPOS Kitchen Display</h2>
+        <span style="font-size: 0.75rem; color: var(--kds-text-dim);">Live Kitchen Automation & Routing</span>
+      </div>
+      <span class="kds-badge">LIVE KDS</span>
+    </div>
+
+    <!-- Station Filter Pills -->
+    <div class="station-filters" id="stationFilters">
+      <button class="station-btn active" data-station="ALL"><i class="fa-solid fa-layer-group"></i> All Stations</button>
+      <button class="station-btn" data-station="COFFEE_BAR"><i class="fa-solid fa-mug-hot"></i> Coffee Bar</button>
+      <button class="station-btn" data-station="HOT_KITCHEN"><i class="fa-solid fa-fire-burner"></i> Hot Kitchen</button>
+      <button class="station-btn" data-station="SALADS"><i class="fa-solid fa-leaf"></i> Salads & Cold</button>
+      <button class="station-btn" data-station="DESSERTS"><i class="fa-solid fa-cake-candles"></i> Bakery</button>
+    </div>
+
+    <div class="kds-actions">
+      <div class="kds-stats-pill">
+        <i class="fa-solid fa-stopwatch" style="color: #10b981;"></i>
+        <span>Active: <strong id="activeTicketsCount" style="color: #fff;">0</strong></span>
+      </div>
+      <a href="/" class="station-btn" style="text-decoration: none;">
+        <i class="fa-solid fa-gauge"></i> Back Office
+      </a>
+      <a href="/order" target="_blank" class="station-btn" style="text-decoration: none;">
+        <i class="fa-solid fa-mobile-screen"></i> Online Order
+      </a>
+    </div>
+  </header>
+
+  <!-- Ticket Grid Board -->
+  <main class="kds-board" id="kdsBoard">
+    <div style="grid-column: 1/-1; text-align: center; color: var(--kds-text-dim); padding: 5rem 1rem;">
+      <i class="fa-solid fa-utensils fa-3x" style="opacity: 0.2; margin-bottom: 1rem;"></i>
+      <p style="font-size: 1.1rem;">All caught up! No tickets currently waiting in kitchen.</p>
+    </div>
+  </main>
+
+  <script src="/kitchen.js"></script>
+</body>
+</html>

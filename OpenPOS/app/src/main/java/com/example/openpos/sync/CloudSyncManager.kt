@@ -171,7 +171,9 @@ class CloudSyncManager(
                                         categoryId = iObj.optString("categoryId", "general"),
                                         barcode = if (iObj.has("barcode") && !iObj.isNull("barcode")) iObj.getString("barcode") else null,
                                         color = iObj.optLong("color", 0xFF2E7D32),
-                                        stockQuantity = iObj.optInt("stockQuantity", 100)
+                                        stockQuantity = iObj.optInt("stockQuantity", 100),
+                                        station = iObj.optString("station", "HOT_KITCHEN"),
+                                        prepTimeMinutes = iObj.optInt("prepTimeMinutes", 5)
                                     )
                                 )
                             }

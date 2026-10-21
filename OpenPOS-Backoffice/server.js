@@ -7,6 +7,15 @@ const PORT = process.env.PORT || 3000;
 // Serve static frontend assets from public/
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Dedicated routes for Customer Online Order Storefront & Kitchen KDS
+app.get('/order', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'order.html'));
+});
+
+app.get('/kitchen', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'kitchen.html'));
+});
+
 // Catch-all route to serve index.html for SPA routing
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();

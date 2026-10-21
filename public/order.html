@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Artisan Cafe & Bistro | Online Ordering</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    :root {
+      --store-primary: #10b981;
+      --store-primary-dark: #059669;
+      --store-accent: #f59e0b;
+      --store-bg: #0b0f19;
+      --store-surface: #131b2e;
+      --store-surface-glass: rgba(19, 27, 46, 0.75);
+      --store-border: rgba(255, 255, 255, 0.08);
+      --store-text: #f3f4f6;
+      --store-text-muted: #9ca3af;
+    }
+
+    body {
+      background-color: var(--store-bg);
+      color: var(--store-text);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    h1, h2, h3, h4, .brand-title {
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .store-navbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--store-surface-glass);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--store-border);
+      padding: 0.85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .brand-logo-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #10b981, #06b6d4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    }
+
+    .brand-name {
+      font-weight: 700;
+      font-size: 1.2rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-tagline {
+      font-size: 0.75rem;
+      color: var(--store-text-muted);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .cart-trigger-btn {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+      border: none;
+      border-radius: 9999px;
+      padding: 0.55rem 1.15rem;
+      font-weight: 600;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+      transition: all 0.2s ease;
+    }
+
+    .cart-trigger-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.45);
+    }
+
+    .cart-count-badge {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+    }
+
+    /* Hero Banner */
+    .hero-banner {
+      background: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.15), transparent 70%),
+                  linear-gradient(180deg, #131b2e 0%, #0b0f19 100%);
+      padding: 2.5rem 1.5rem 2rem;
+      text-align: center;
+      border-bottom: 1px solid var(--store-border);
+      position: relative;
+    }
+
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      margin-bottom: 1rem;
+    }
+
+    .hero-title {
+      font-size: 2.25rem;
+      font-weight: 800;
+      margin: 0 0 0.5rem;
+      background: linear-gradient(135deg, #ffffff 40%, #9ca3af 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      color: var(--store-text-muted);
+      max-width: 580px;
+      margin: 0 auto 1.5rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    /* Order Mode Selector */
+    .order-mode-tabs {
+      display: inline-flex;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 0.35rem;
+      border-radius: 14px;
+      border: 1px solid var(--store-border);
+      gap: 0.35rem;
+      max-width: 440px;
+      width: 100%;
+    }
+
+    .order-mode-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--store-text-muted);
+      font-weight: 600;
+      padding: 0.6rem 0.75rem;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      font-size: 0.875rem;
+      transition: all 0.2s ease;
+    }
+
+    .order-mode-btn.active {
+      background: var(--store-surface);
+      color: #fff;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Category Bar */
+    .category-scroll-bar {
+      position: sticky;
+      top: 67px;
+      z-index: 40;
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(12px);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--store-border);
+      scrollbar-width: none;
+    }
+    .category-scroll-bar::-webkit-scrollbar { display: none; }
+
+    .cat-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--store-border);
+      color: var(--store-text-muted);
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .cat-pill:hover, .cat-pill.active {
+      background: var(--store-primary);
+      color: #fff;
+      border-color: var(--store-primary);
+      box-shadow: 0 3px 12px rgba(16, 185, 129, 0.35);
+    }
+
+    /* Main Menu Grid */
+    .menu-container {
+      max-width: 1200px;
+      margin: 2rem auto;
+      padding: 0 1.5rem 6rem;
+    }
+
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .menu-card {
+      background: var(--store-surface);
+      border: 1px solid var(--store-border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+      position: relative;
+    }
+
+    .menu-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(16, 185, 129, 0.4);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .item-icon-box {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.35rem;
+      color: var(--store-primary);
+    }
+
+    .item-station-tag {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--store-text-muted);
+    }
+
+    .item-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin: 0 0 0.35rem;
+      color: #fff;
+    }
+
+    .item-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--store-text-muted);
+      margin-bottom: 0.75rem;
+    }
+
+    .item-prep-time {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .item-desc {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      line-height: 1.4;
+      margin: 0 0 1.25rem;
+      flex-grow: 1;
+    }
+
+    .card-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding-top: 1rem;
+    }
+
+    .item-price {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #fff;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .add-to-cart-btn {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 0.5rem 1rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.875rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.2s;
+    }
+
+    .add-to-cart-btn:hover {
+      background: var(--store-primary);
+      color: #fff;
+      border-color: var(--store-primary);
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    }
+
+    /* Cart Drawer */
+    .cart-drawer {
+      position: fixed;
+      top: 0;
+      right: -420px;
+      width: 100%;
+      max-width: 420px;
+      height: 100vh;
+      background: var(--store-surface);
+      border-left: 1px solid var(--store-border);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .cart-drawer.open {
+      right: 0;
+    }
+
+    .cart-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      z-index: 90;
+      display: none;
+    }
+
+    .cart-backdrop.open {
+      display: block;
+    }
+
+    .cart-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--store-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .cart-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.25rem 1.5rem;
+    }
+
+    .cart-item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .cart-qty-ctrl {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      padding: 0.2rem 0.4rem;
+    }
+
+    .qty-btn {
+      background: transparent;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.85rem;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+    .qty-btn:hover { background: rgba(255, 255, 255, 0.1); }
+
+    .cart-footer {
+      padding: 1.25rem 1.5rem;
+      border-top: 1px solid var(--store-border);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .checkout-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      padding: 0.9rem;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .checkout-btn:hover {
+      box-shadow: 0 6px 24px rgba(16, 185, 129, 0.55);
+      transform: translateY(-1px);
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      z-index: 110;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal-card {
+      background: var(--store-surface);
+      border: 1px solid var(--store-border);
+      border-radius: 20px;
+      max-width: 480px;
+      width: 100%;
+      padding: 1.75rem;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+    }
+
+    /* Order Tracker Card */
+    .tracker-card {
+      background: var(--store-surface);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 20px;
+      padding: 2rem;
+      text-align: center;
+      max-width: 520px;
+      margin: 3rem auto;
+      box-shadow: 0 15px 40px rgba(0,0,0,0.5);
+    }
+
+    .tracker-steps {
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      margin: 2rem 0;
+    }
+    .tracker-steps::before {
+      content: '';
+      position: absolute;
+      top: 15px;
+      left: 30px;
+      right: 30px;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      z-index: 1;
+    }
+    .tracker-step {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .step-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--store-surface);
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+    .tracker-step.active .step-circle {
+      background: var(--store-primary);
+      border-color: var(--store-primary);
+      color: #fff;
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+    }
+    .tracker-step.done .step-circle {
+      background: #059669;
+      border-color: #059669;
+      color: #fff;
+    }
+    .step-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #9ca3af;
+    }
+    .tracker-step.active .step-label {
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="store-navbar">
+    <a href="/order" class="brand-group">
+      <div class="brand-logo-icon">
+        <i class="fa-solid fa-mug-hot"></i>
+      </div>
+      <div>
+        <div class="brand-name">Artisan Cafe & Bistro</div>
+        <div class="brand-tagline">Cloud Digital Storefront</div>
+      </div>
+    </a>
+
+    <div class="nav-actions">
+      <a href="/" class="btn btn-outline btn-sm" style="font-size:0.8rem;border-radius:9999px;">
+        <i class="fa-solid fa-gauge"></i> Back Office
+      </a>
+      <a href="/kitchen" class="btn btn-outline btn-sm" style="font-size:0.8rem;border-radius:9999px;">
+        <i class="fa-solid fa-kitchen-set"></i> Kitchen KDS
+      </a>
+      <button class="cart-trigger-btn" id="openCartBtn">
+        <i class="fa-solid fa-basket-shopping"></i>
+        <span>Cart</span>
+        <span class="cart-count-badge" id="cartBadge">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hero Section & Mode Selector -->
+  <section class="hero-banner">
+    <div class="hero-pill">
+      <i class="fa-solid fa-circle-dot"></i> Live Kitchen Ready · Est. 15-20 min
+    </div>
+    <h1 class="hero-title">Delicious Craft Food & Coffee</h1>
+    <p class="hero-subtitle">Order directly from our kitchen. Prepared fresh to order with real-time tracking.</p>
+
+    <div class="order-mode-tabs" id="orderModeTabs">
+      <button class="order-mode-btn active" data-mode="DINE_IN">
+        <i class="fa-solid fa-utensils"></i> Dine-In
+      </button>
+      <button class="order-mode-btn" data-mode="TAKEAWAY">
+        <i class="fa-solid fa-bag-shopping"></i> Takeaway
+      </button>
+      <button class="order-mode-btn" data-mode="DELIVERY">
+        <i class="fa-solid fa-motorcycle"></i> Delivery
+      </button>
+    </div>
+  </section>
+
+  <!-- Sticky Category Navigation Bar -->
+  <nav class="category-scroll-bar" id="categoryBar">
+    <button class="cat-pill active" data-category="ALL">All Items</button>
+  </nav>
+
+  <!-- Menu Item Cards Container -->
+  <main class="menu-container" id="menuMainView">
+    <div class="menu-grid" id="menuItemsGrid">
+      <div style="grid-column: 1/-1; text-align: center; color: var(--store-text-muted); padding: 3rem;">
+        <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i>
+        <p style="margin-top: 1rem;">Loading fresh menu from OpenPOS cloud...</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Order Tracker View (Hidden by default, shown after checkout) -->
+  <section id="orderTrackerView" style="display: none; padding: 2rem 1.5rem;">
+    <div class="tracker-card">
+      <div style="font-size: 3rem; color: #10b981; margin-bottom: 1rem;">
+        <i class="fa-solid fa-circle-check"></i>
+      </div>
+      <h2 style="margin: 0 0 0.5rem;">Order Successfully Received!</h2>
+      <p style="color: var(--store-text-muted); margin-bottom: 1.5rem;">
+        Order <strong id="trackerOrderNumber" style="color: #fff; font-size: 1.2rem;">#W-101</strong> has been routed to our kitchen stations.
+      </p>
+
+      <!-- Animated 4-step Tracker -->
+      <div class="tracker-steps">
+        <div class="tracker-step done" id="step1">
+          <div class="step-circle"><i class="fa-solid fa-check"></i></div>
+          <span class="step-label">Received</span>
+        </div>
+        <div class="tracker-step active" id="step2">
+          <div class="step-circle"><i class="fa-solid fa-fire-burner"></i></div>
+          <span class="step-label">Preparing</span>
+        </div>
+        <div class="tracker-step" id="step3">
+          <div class="step-circle"><i class="fa-solid fa-bell-concierge"></i></div>
+          <span class="step-label">Ready</span>
+        </div>
+        <div class="tracker-step" id="step4">
+          <div class="step-circle"><i class="fa-solid fa-heart"></i></div>
+          <span class="step-label">Served</span>
+        </div>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.04); border-radius: 12px; padding: 1rem; margin-bottom: 1.5rem; text-align: left;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+          <span style="color: var(--store-text-muted);">Estimated Ready Time:</span>
+          <strong style="color: #10b981;" id="trackerEstTime">In 12 minutes</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span style="color: var(--store-text-muted);">Destination:</span>
+          <strong id="trackerDestination">Table 4 (Dine-In)</strong>
+        </div>
+      </div>
+
+      <button class="btn btn-outline" id="newOrderBtn" style="width: 100%;">
+        <i class="fa-solid fa-plus"></i> Place Another Order
+      </button>
+    </div>
+  </section>
+
+  <!-- Slide-over Cart Drawer -->
+  <div class="cart-backdrop" id="cartBackdrop"></div>
+  <aside class="cart-drawer" id="cartDrawer">
+    <div class="cart-header">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fa-solid fa-basket-shopping" style="color: var(--store-primary);"></i>
+        <h3 style="margin: 0; font-size: 1.15rem;">Your Order</h3>
+      </div>
+      <button class="btn btn-icon btn-sm" id="closeCartBtn" style="color: var(--store-text-muted);">&times;</button>
+    </div>
+
+    <div class="cart-body" id="cartItemsList">
+      <div style="text-align: center; color: var(--store-text-muted); padding: 3rem 1rem;">
+        <i class="fa-solid fa-mug-saucer fa-3x" style="opacity: 0.3; margin-bottom: 1rem;"></i>
+        <p>Your order is empty.<br>Select items from our menu to start.</p>
+      </div>
+    </div>
+
+    <div class="cart-footer">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; color: var(--store-text-muted); font-size: 0.9rem;">
+        <span>Subtotal</span>
+        <span id="cartSubtotal">$0.00</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 0.85rem; color: var(--store-text-muted); font-size: 0.9rem;">
+        <span>VAT / Tax (17%)</span>
+        <span id="cartTax">$0.00</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 1.25rem; font-size: 1.25rem; font-weight: 800; color: #fff;">
+        <span>Total</span>
+        <span id="cartTotal" style="color: #10b981;">$0.00</span>
+      </div>
+
+      <button class="checkout-btn" id="proceedCheckoutBtn">
+        <span>Proceed to Checkout</span>
+        <i class="fa-solid fa-arrow-right"></i>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Checkout Details Modal -->
+  <div class="modal-overlay" id="checkoutModal">
+    <div class="modal-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+        <h3 style="margin: 0;">Confirm Your Order</h3>
+        <button class="btn btn-icon btn-sm" id="closeCheckoutModalBtn">&times;</button>
+      </div>
+
+      <form id="checkoutForm">
+        <div style="margin-bottom: 1rem;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Customer Name *</label>
+          <input type="text" id="custNameInput" class="form-input" required placeholder="e.g. David Cohen" style="width: 100%;">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Phone Number *</label>
+          <input type="tel" id="custPhoneInput" class="form-input" required placeholder="e.g. 050-1234567" style="width: 100%;">
+        </div>
+
+        <div id="tableNumberGroup" style="margin-bottom: 1rem;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Table Number *</label>
+          <input type="text" id="custTableInput" class="form-input" placeholder="e.g. Table 4" value="Table 1" style="width: 100%;">
+        </div>
+
+        <div id="deliveryAddressGroup" style="display: none; margin-bottom: 1rem;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Delivery Address *</label>
+          <input type="text" id="custAddressInput" class="form-input" placeholder="Street, Apt / Suite, City" style="width: 100%;">
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Kitchen Preparation Notes</label>
+          <input type="text" id="custNotesInput" class="form-input" placeholder="e.g. Oat milk, no ice, extra napkins..." style="width: 100%;">
+        </div>
+
+        <button type="submit" class="checkout-btn" style="width: 100%;">
+          <i class="fa-solid fa-lock"></i> Send Order to Kitchen
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/order.js"></script>
+</body>
+</html>

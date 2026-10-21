@@ -41,7 +41,9 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                 category_id TEXT NOT NULL,
                 barcode TEXT,
                 color INTEGER NOT NULL,
-                stock_quantity INTEGER DEFAULT 100
+                stock_quantity INTEGER DEFAULT 100,
+                station TEXT DEFAULT 'HOT_KITCHEN',
+                prep_time_minutes INTEGER DEFAULT 5
             )
         """)
 
@@ -203,6 +205,14 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                 db.execSQL("ALTER TABLE $TABLE_EMPLOYEES ADD COLUMN pin_hash TEXT")
             } catch (_: Exception) {}
 
+            // Safely alter items table for restaurant kitchen station and prep time
+            try {
+                db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN station TEXT DEFAULT 'HOT_KITCHEN'")
+            } catch (_: Exception) {}
+            try {
+                db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN prep_time_minutes INTEGER DEFAULT 5")
+            } catch (_: Exception) {}
+
             createIndices(db)
         }
     }
@@ -222,6 +232,8 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                     put("barcode", item.barcode)
                     put("color", item.color)
                     put("stock_quantity", item.stockQuantity)
+                    put("station", item.station)
+                    put("prep_time_minutes", item.prepTimeMinutes)
                 }
                 db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -243,8 +255,12 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             val barcodeIdx = it.getColumnIndexOrThrow("barcode")
             val colorIdx = it.getColumnIndexOrThrow("color")
             val stockIdx = it.getColumnIndexOrThrow("stock_quantity")
+            val stationIdx = it.getColumnIndex("station")
+            val prepIdx = it.getColumnIndex("prep_time_minutes")
 
             while (it.moveToNext()) {
+                val station = if (stationIdx >= 0 && !it.isNull(stationIdx)) it.getString(stationIdx) else "HOT_KITCHEN"
+                val prepTime = if (prepIdx >= 0 && !it.isNull(prepIdx)) it.getInt(prepIdx) else 5
                 list.add(
                     Item(
                         id = it.getString(idIdx),
@@ -253,7 +269,9 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                         categoryId = it.getString(catIdx),
                         barcode = it.getString(barcodeIdx),
                         color = it.getLong(colorIdx),
-                        stockQuantity = it.getInt(stockIdx)
+                        stockQuantity = it.getInt(stockIdx),
+                        station = station,
+                        prepTimeMinutes = prepTime
                     )
                 )
             }
@@ -271,6 +289,8 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             put("barcode", item.barcode)
             put("color", item.color)
             put("stock_quantity", item.stockQuantity)
+            put("station", item.station)
+            put("prep_time_minutes", item.prepTimeMinutes)
         }
         db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }

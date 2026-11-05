@@ -3,12 +3,13 @@ name: Deploy OpenPOS Cloudflare staging
 on:
   workflow_dispatch:
   push:
-    branches: [feat/cloudflare-workers-hyperdrive-rebased]
+    branches: [feat/cloudflare-static-assets]
     paths:
       - "cloudflare/**"
       - "api/**"
       - "supabase/migrations/**"
       - "wrangler.jsonc"
+      - "public/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/cloudflare-staging-deploy.yml"
@@ -85,6 +86,18 @@ jobs:
               console.log("OpenPOS staging database connection verified.");
             });
           '
+
+      - name: Verify static storefront, ordering, and kitchen routes
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://openpos-cloudflare-staging.b4u2store.workers.dev";
+          const paths = ["/", "/order", "/kitchen", "/style.css", "/app.js"];
+          for (const path of paths) {
+            const response = await fetch(new URL(path, base));
+            if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+            console.log(`${path}: HTTP ${response.status}`);
+          }
+          NODE
 
       - name: Verify Express API and reject unauthenticated access
         env:

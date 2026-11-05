@@ -70,7 +70,7 @@ jobs:
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 5 --retry-delay 2 \
+          response="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --retry 5 --retry-delay 2 \
             -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
             https://openpos-cloudflare-staging.b4u2store.workers.dev/health/db)"
           printf '%s' "$response" | node -e '
@@ -79,7 +79,7 @@ jobs:
             process.stdin.on("end", () => {
               const result = JSON.parse(body);
               if (result.status !== "ok" || result.database !== "connected" || result.databaseRole !== "openpos_app") {
-                console.error("Database health check did not confirm connectivity.");
+                console.error("Database health check did not confirm connectivity:", { status: result.status, database: result.database, databaseRole: result.databaseRole, errorCode: result.errorCode });
                 process.exit(1);
               }
               console.log("OpenPOS staging database connection verified.");

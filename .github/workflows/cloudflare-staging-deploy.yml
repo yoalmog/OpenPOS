@@ -78,7 +78,7 @@ jobs:
             process.stdin.on("data", chunk => body += chunk);
             process.stdin.on("end", () => {
               const result = JSON.parse(body);
-              if (result.status !== "ok" || result.database !== "connected") {
+              if (result.status !== "ok" || result.database !== "connected" || result.databaseRole !== "openpos_app") {
                 console.error("Database health check did not confirm connectivity.");
                 process.exit(1);
               }

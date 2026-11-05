@@ -48,9 +48,28 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
+      - name: Cache stable Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.config/.android/debug.keystore
+          key: openpos-android-debug-keystore-v1-${{ runner.os }}
       - name: Assemble Android debug APK
         working-directory: OpenPOS
         run: bash ./gradlew :app:assembleDebug
+      - name: Report Android debug SHA-1 for Firebase
+        working-directory: OpenPOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./gradlew signingReport | tee signing-report.txt
+          SHA1="$(awk '/Variant: debug/{debug=1} debug && /SHA1:/{print $2; exit}' signing-report.txt)"
+          test -n "$SHA1"
+          echo "Android debug SHA-1: $SHA1"
+          {
+            echo "### Firebase Android SHA-1"
+            echo 'Add this fingerprint to Firebase Project settings > Your apps > Android app:'
+            echo "$SHA1"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Verify APK and calculate checksum
         working-directory: OpenPOS
         shell: bash

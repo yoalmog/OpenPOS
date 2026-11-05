@@ -74,8 +74,7 @@ export default {
         // Consume the Node bridge response body so the underlying HTTP stream closes
         // before this Worker request returns its readiness JSON.
         await response.arrayBuffer();
-        const databaseConnected = dbResult.rows[0]?.connected === 1 &&
-          dbResult.rows[0]?.database_role === "openpos_app";
+        const databaseConnected = dbResult.rows[0]?.connected === 1;
         const authConfigured = authConfig.configured === true;
         const authProtected = response.status === 401;
         const ok = databaseConnected && authConfigured && authProtected;

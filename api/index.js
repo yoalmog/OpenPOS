@@ -1129,6 +1129,8 @@ app.get('/api/online-orders', async (req, res) => {
 });
 
 app.post('/api/online-orders', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   const db = loadFileData();
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
 
@@ -1186,19 +1188,28 @@ app.post('/api/online-orders', async (req, res) => {
   // An unpaid web order is not a completed sale: do not create a receipt
   // or record CARD revenue until a payment provider confirms settlement.
 
-  // Automatic ingredient depletion and KDS Station routing!
+  // Generate station tickets without mutating inventory; persist both records atomically.
+  const ticketDb = { ...db, kitchenOrders: [], ingredients: JSON.parse(JSON.stringify(db.ingredients || [])) };
   processRecipeDepletionAndKDS({
-    id: order.id,
-    orderNumber: order.orderNumber,
-    channel: "WEB",
-    tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
-    customerName: `${order.customerName} (${order.customerPhone})`,
+    id: order.id, orderNumber: order.orderNumber, channel: "WEB",
+    tableNumber: order.tableNumber || order.deliveryType,
+    customerName: order.customerName + (order.customerPhone ? " (" + order.customerPhone + ")" : ""),
     items: order.items
-  }, db, { depleteInventory: false });
-
-  saveFileData(db);
+  }, ticketDb, { depleteInventory: false });
+  const tickets = ticketDb.kitchenOrders || [];
+  try {
+    if (pgPool) await createOnlineOrderWithTickets(pgPool, order, tickets);
+    else {
+      db.onlineOrders.unshift(order);
+      db.kitchenOrders = [...tickets, ...(db.kitchenOrders || [])].slice(0, 80);
+      saveFileData(db);
+    }
+  } catch (error) {
+    console.error("[DB] Atomic online order/KDS insert failed:", error.message);
+    return res.status(503).json({ error: "The order could not be safely saved. Please retry." });
+  }
   logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
-  res.json({ success: true, order });
+  res.json({ success: true, order, kitchenTickets: tickets.length });
 });
 
 app.post('/api/online-orders/:id/status', async (req, res) => {

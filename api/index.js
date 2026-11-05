@@ -1056,17 +1056,21 @@ app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
 });
 
 app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
-  const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
-  if (!ticket) return res.status(404).json({ error: "Ticket not found." });
-
-  ticket.status = status; // PENDING, PREPARING, READY, SERVED
-  if (status === 'READY' || status === 'SERVED') {
-    ticket.completedAt = Date.now();
+  if (!['PENDING', 'PREPARING', 'READY', 'SERVED'].includes(status)) return res.status(400).json({ error: "Invalid kitchen ticket status." });
+  if (pgPool) {
+    try {
+      const completedAt = status === 'READY' || status === 'SERVED' ? Date.now() : null;
+      const result = await pgPool.query('UPDATE kitchen_orders SET status = $1, completed_at = $2 WHERE id = $3 RETURNING id, receipt_id AS "receiptId", channel, order_number AS "orderNumber", table_number AS "tableNumber", customer_name AS "customerName", station, items, status, created_at AS "createdAt", target_ready_at AS "targetReadyAt", completed_at AS "completedAt"', [status, completedAt, req.params.id]);
+      if (!result.rowCount) return res.status(404).json({ error: "Ticket not found." });
+      return res.json({ success: true, ticket: result.rows[0] });
+    } catch (error) { console.error('[KDS] PostgreSQL update failed:', error.message); return res.status(503).json({ error: 'Kitchen ticket could not be updated.' }); }
   }
-  saveFileData(db);
-  res.json({ success: true, ticket });
+  if (isVercel) return res.status(503).json({ error: 'Persistent kitchen storage is not configured.' });
+  const db = loadFileData(); const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Ticket not found." });
+  ticket.status = status; if (status === 'READY' || status === 'SERVED') ticket.completedAt = Date.now();
+  saveFileData(db); return res.json({ success: true, ticket });
 });
 
 // -------------------------------------------------------------
@@ -1121,14 +1125,19 @@ app.post('/api/online-orders', async (req, res) => {
 });
 
 app.post('/api/online-orders/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
-  const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
+  if (!['RECEIVED', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'].includes(status)) return res.status(400).json({ error: "Invalid order status." });
+  if (pgPool) {
+    try {
+      const result = await pgPool.query('UPDATE online_orders SET status = $1 WHERE id = $2 RETURNING id, order_number AS "orderNumber", channel, delivery_type AS "deliveryType", customer_name AS "customerName", customer_phone AS "customerPhone", pickup_time AS "pickupTime", subtotal, tax, total, payment_method AS "paymentMethod", payment_status AS "paymentStatus", status, items, created_at AS "createdAt"', [status, req.params.id]);
+      if (!result.rowCount) return res.status(404).json({ error: "Order not found." });
+      return res.json({ success: true, order: result.rows[0] });
+    } catch (error) { console.error('[Orders] PostgreSQL update failed:', error.message); return res.status(503).json({ error: 'Order could not be updated.' }); }
+  }
+  if (isVercel) return res.status(503).json({ error: 'Persistent order storage is not configured.' });
+  const db = loadFileData(); const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found." });
-
-  order.status = status; // RECEIVED, PREPARING, READY, COMPLETED, CANCELLED
-  saveFileData(db);
-  res.json({ success: true, order });
+  order.status = status; saveFileData(db); return res.json({ success: true, order });
 });
 
 // -------------------------------------------------------------

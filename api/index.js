@@ -625,7 +625,9 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
 
   // 1. Raw Ingredient Depletion. Public online orders are not paid/accepted yet,
   // so they must not consume stock until staff confirms the order.
-  if (options.depleteInventory !== false) order.items.forEach(orderItem => {
+  // The legacy file-backed recipe/ingredient arrays are demo fallbacks in Vercel.
+  // Never mutate them as if they were authoritative production inventory.
+  if (options.depleteInventory !== false && !isVercel) order.items.forEach(orderItem => {
     const itemId = orderItem.itemId || orderItem.id;
     const orderQty = Number(orderItem.quantity || orderItem.qty || 1);
     const recipe = db.recipes.find(r => r.itemId === itemId || r.itemName === orderItem.name);

@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: openpos-cloudflare-staging-v4
+  group: openpos-cloudflare-staging-v5
   cancel-in-progress: true
 
 jobs:

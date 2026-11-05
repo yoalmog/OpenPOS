@@ -1,26 +1,7 @@
-import { Pool } from "pg";
+import { Client } from "pg";
 
 // This isolated probe validates the Hyperdrive binding before the legacy API
 // is adapted. It deliberately exposes no business data and is not a POS API.
-let pool;
-
-function getPool(env) {
-  if (!env.HYPERDRIVE?.connectionString) {
-    throw new Error("HYPERDRIVE binding is not configured");
-  }
-
-  if (!pool) {
-    pool = new Pool({
-      connectionString: env.HYPERDRIVE.connectionString,
-      max: 5,
-      connectionTimeoutMillis: 5000,
-      idleTimeoutMillis: 10000,
-    });
-  }
-
-  return pool;
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -38,14 +19,26 @@ export default {
     }
 
     if (url.pathname === "/health/db") {
+      if (!env.HYPERDRIVE?.connectionString) {
+        return Response.json(
+          { status: "error", database: "binding_not_configured" },
+          { status: 503 },
+        );
+      }
+
+      const client = new Client({
+        connectionString: env.HYPERDRIVE.connectionString,
+        connectionTimeoutMillis: 5000,
+      });
+
       try {
-        const result = await getPool(env).query("SELECT 1 AS connected");
+        await client.connect();
+        const result = await client.query("SELECT 1 AS connected");
         return Response.json({
           status: "ok",
           database: result.rows[0]?.connected === 1 ? "connected" : "unexpected_result",
         });
       } catch (error) {
-        // Do not return connection strings, credentials, or raw driver errors.
         console.error("OpenPOS Hyperdrive probe failed", {
           code: error?.code || "UNKNOWN",
         });
@@ -53,6 +46,14 @@ export default {
           { status: "error", database: "unavailable" },
           { status: 503 },
         );
+      } finally {
+        try {
+          await client.end();
+        } catch (error) {
+          console.error("OpenPOS Hyperdrive client cleanup failed", {
+            code: error?.code || "UNKNOWN",
+          });
+        }
       }
     }
 

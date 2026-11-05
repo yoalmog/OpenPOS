@@ -310,6 +310,7 @@ function configureDatabase(connectionString) {
     pgPool = new Pool({
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
+      ...(isCloudflareWorker ? { options: "-c role=openpos_app" } : {}),
       max: 10,
       idleTimeoutMillis: 30000
     });

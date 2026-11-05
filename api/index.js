@@ -1213,12 +1213,20 @@ app.post('/api/online-orders', async (req, res) => {
 });
 
 app.post('/api/online-orders/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
+  if (!["RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "Invalid order status." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (pgPool) {
+    try {
+      const order = await updateOnlineOrderStatus(pgPool, req.params.id, status);
+      return order ? res.json({ success: true, order }) : res.status(404).json({ error: "Order not found." });
+    } catch (error) { console.error("[DB] Online order status update failed:", error.message); return res.status(503).json({ error: "Could not update persistent online order." }); }
+  }
+  const db = loadFileData();
   const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found." });
-
-  order.status = status; // RECEIVED, PREPARING, READY, COMPLETED, CANCELLED
+  order.status = status;
   saveFileData(db);
   res.json({ success: true, order });
 });

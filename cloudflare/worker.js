@@ -51,6 +51,35 @@ export default {
       });
     }
 
+    if (url.pathname === "/health/api") {
+      if (request.method !== "GET") {
+        return Response.json({ error: "Method not allowed" }, { status: 405 });
+      }
+      const expectedToken = workerEnv.OPENPOS_HEALTH_TOKEN;
+      const authorization = request.headers.get("authorization") || "";
+      if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
+        return unauthorized();
+      }
+      try {
+        const handler = await getExpressHandler(workerEnv);
+        const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
+        const response = await handler(probe);
+        return Response.json({
+          status: response.status === 401 ? "ok" : "unexpected",
+          expressStatus: response.status
+        }, { status: response.status === 401 ? 200 : 503 });
+      } catch (error) {
+        console.error("OpenPOS protected API probe failed", {
+          name: error?.name || "Error",
+          message: error?.message || "Unknown initialization error"
+        });
+        return Response.json({
+          status: "error",
+          error: error?.message || "API initialization failed"
+        }, { status: 503 });
+      }
+    }
+
     if (url.pathname === "/health/db") {
       if (request.method !== "GET") {
         return Response.json({ error: "Method not allowed" }, { status: 405 });

@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { createOnlineOrderWithTickets, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
 
 const app = express();
 
@@ -411,7 +412,8 @@ async function initPgTables() {
         status TEXT DEFAULT 'PENDING',
         created_at BIGINT NOT NULL,
         target_ready_at BIGINT NOT NULL,
-        completed_at BIGINT
+        completed_at BIGINT,
+        ticket_data JSONB
       );
 
       CREATE TABLE IF NOT EXISTS online_orders (
@@ -429,7 +431,8 @@ async function initPgTables() {
         payment_status TEXT,
         status TEXT DEFAULT 'RECEIVED',
         items JSONB NOT NULL,
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        order_data JSONB
       );
 
       CREATE TABLE IF NOT EXISTS waste_logs (
@@ -491,6 +494,9 @@ async function initPgTables() {
         timestamp BIGINT NOT NULL,
         ip TEXT
       );
+
+      ALTER TABLE kitchen_orders ADD COLUMN IF NOT EXISTS ticket_data JSONB;
+      ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS order_data JSONB;
 
       CREATE INDEX IF NOT EXISTS idx_pg_receipts_ts ON receipts (timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_pg_items_cat ON items (category_id);

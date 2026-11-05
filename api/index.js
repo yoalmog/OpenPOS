@@ -6,6 +6,10 @@ const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, lis
 const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
 const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
 const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
+const { getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
+const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
+const { validateSyncEvent } = require('./lib/sync-validation');
+const { listShifts, getOpenShift, startShift, closeShift } = require('./lib/shift-repository');
 
 const app = express();
 
@@ -14,9 +18,11 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABA
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
 
-// Determine environment
+// Production runtimes must never use ephemeral/local files as business storage.
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-const DATA_DIR = isVercel ? '/tmp' : path.join(__dirname, '..', 'data');
+const isCloudflareWorker = process.env.OPENPOS_RUNTIME === 'cloudflare';
+const isProductionRuntime = isVercel || isCloudflareWorker;
+const DATA_DIR = isProductionRuntime ? '/tmp' : path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'store_data.json');
 
 try {
@@ -290,28 +296,131 @@ const DEFAULT_DATA = {
 
 // PostgreSQL Connection Pool Setup
 let pgPool = null;
-const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+let dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
-if (dbUrl) {
+// Can be called by the Cloudflare Worker inside request context after reading
+// the Hyperdrive binding. Existing Node/Vercel deployments keep env-based setup.
+function configureDatabase(connectionString) {
+  if (pgPool) return pgPool;
+  dbUrl = connectionString || dbUrl;
+  if (!dbUrl) return null;
+
   try {
     const { Pool } = require('pg');
     pgPool = new Pool({
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
       max: 10,
-      idleTimeoutMillis: 30000
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+      query_timeout: 10000,
+      statement_timeout: 10000
     });
+
+    // Supabase transaction poolers can reset session state between transactions.
+    // Use SET LOCAL ROLE inside every transaction so all Worker queries are RLS-scoped.
+    if (isCloudflareWorker) {
+      const originalConnect = pgPool.connect.bind(pgPool);
+
+      const wrapClient = (client) => {
+        const originalQuery = client.query.bind(client);
+        client.query = function queryWithRestrictedRole(query, values, callback) {
+          let params = values;
+          let done = callback;
+          if (typeof values === "function") {
+            done = values;
+            params = undefined;
+          }
+          const sql = typeof query === "string" ? query : query?.text || "";
+          if (/^\s*BEGIN\b/i.test(sql)) {
+            if (typeof done === "function") {
+              return originalQuery(query, params, (error, result) => {
+                if (error) return done(error);
+                originalQuery("SET LOCAL ROLE openpos_app", (roleError) => done(roleError || null, result));
+              });
+            }
+            return originalQuery(query, params).then(async (result) => {
+              await originalQuery("SET LOCAL ROLE openpos_app");
+              return result;
+            });
+          }
+          return originalQuery(query, params, done);
+        };
+        return client;
+      };
+
+      pgPool.connect = function connectWithRestrictedRole(callback) {
+        if (typeof callback === "function") {
+          return originalConnect((error, client, release) => {
+            if (error) return callback(error);
+            callback(null, wrapClient(client), release);
+          });
+        }
+        return originalConnect().then(wrapClient);
+      };
+
+      pgPool.query = function queryWithRestrictedRole(query, values, callback) {
+        let params = values;
+        let done = callback;
+        if (typeof values === "function") {
+          done = values;
+          params = undefined;
+        }
+        const operation = (async () => {
+          const client = await originalConnect();
+          try {
+            await client.query("BEGIN");
+            await client.query("SET LOCAL ROLE openpos_app");
+            const result = await client.query(query, params);
+            await client.query("COMMIT");
+            return result;
+          } catch (error) {
+            try { await client.query("ROLLBACK"); } catch (_) {}
+            throw error;
+          } finally {
+            client.release();
+          }
+        })();
+        if (typeof done === "function") {
+          operation.then((result) => done(null, result)).catch(done);
+          return;
+        }
+        return operation;
+      };
+    }
     console.log("[DB] Initializing PostgreSQL client connection pool...");
   } catch (err) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);
     pgPool = null;
   }
+  return pgPool;
 }
 
-// In-Memory / File Fallback State
-let inMemoryStore = JSON.parse(JSON.stringify(DEFAULT_DATA));
+if (dbUrl) configureDatabase(dbUrl);
+
+// In-Memory / File Fallback State.
+// Production runtimes start empty and must never inherit demo fixtures or local files.
+const EMPTY_PRODUCTION_DATA = {
+  storeInfo: null,
+  categories: [],
+  items: [],
+  ingredients: [],
+  recipes: [],
+  kitchenOrders: [],
+  onlineOrders: [],
+  wasteLogs: [],
+  temperatureLogs: [],
+  checklists: [],
+  shifts: [],
+  receipts: [],
+  auditLogs: []
+};
+let inMemoryStore = JSON.parse(JSON.stringify(
+  isProductionRuntime ? EMPTY_PRODUCTION_DATA : DEFAULT_DATA
+));
 
 function loadFileData() {
+  if (isProductionRuntime) return inMemoryStore;
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
@@ -348,168 +457,54 @@ function saveFileData(data) {
   }
 }
 
-// Auto-create database tables on PostgreSQL
+// Auto-create database tables on PostgreSQL.
+// Share one initialization promise across concurrent requests so DDL runs once.
+// A failed attempt clears the promise and can be retried on the next request.
 let tablesInitialized = false;
+let tablesInitializationPromise = null;
 async function initPgTables() {
   if (!pgPool || tablesInitialized) return;
-  const client = await pgPool.connect();
+  if (tablesInitializationPromise) return tablesInitializationPromise;
+
+  tablesInitializationPromise = (async () => {
+    const requiredTables = [
+      "store_settings",
+      "categories",
+      "items",
+      "ingredients",
+      "recipes",
+      "kitchen_orders",
+      "online_orders",
+      "waste_logs",
+      "temperature_logs",
+      "receipts",
+      "shifts",
+      "audit_logs",
+      "operational_records"
+    ];
+    try {
+      const result = await pgPool.query(
+        `SELECT table_name
+           FROM unnest($1::text[]) AS required(table_name)
+          WHERE to_regclass(format('public.%I', required.table_name)) IS NULL`,
+        [requiredTables]
+      );
+      if (result.rows.length) {
+        const missing = result.rows.map(row => row.table_name);
+        throw new Error(`Database schema is incomplete; missing tables: ${missing.join(", ")}. Apply the committed OpenPOS migrations before starting the Worker.`);
+      }
+      tablesInitialized = true;
+      console.log("[DB] PostgreSQL schema readiness verified.");
+    } catch (err) {
+      console.error("[DB] PostgreSQL schema readiness check failed:", err.message);
+      throw err;
+    }
+  })();
+
   try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS store_settings (
-        key TEXT PRIMARY KEY,
-        value JSONB NOT NULL,
-        updated_at BIGINT
-      );
-
-      CREATE TABLE IF NOT EXISTS categories (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        color BIGINT NOT NULL,
-        updated_at BIGINT
-      );
-
-      CREATE TABLE IF NOT EXISTS items (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        price NUMERIC NOT NULL,
-        category_id TEXT,
-        barcode TEXT,
-        color BIGINT,
-        stock_quantity INT DEFAULT 100,
-        station TEXT DEFAULT 'HOT_KITCHEN',
-        prep_time_minutes INT DEFAULT 5,
-        updated_at BIGINT
-      );
-
-      CREATE TABLE IF NOT EXISTS ingredients (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        unit TEXT NOT NULL,
-        unit_cost NUMERIC NOT NULL,
-        current_stock NUMERIC DEFAULT 0,
-        min_threshold NUMERIC DEFAULT 0,
-        updated_at BIGINT
-      );
-
-      CREATE TABLE IF NOT EXISTS recipes (
-        item_id TEXT PRIMARY KEY,
-        item_name TEXT NOT NULL,
-        station TEXT DEFAULT 'HOT_KITCHEN',
-        prep_time_minutes INT DEFAULT 5,
-        ingredients JSONB NOT NULL,
-        labor_cost NUMERIC DEFAULT 0,
-        allergens TEXT,
-        instructions TEXT,
-        updated_at BIGINT
-      );
-
-      CREATE TABLE IF NOT EXISTS kitchen_orders (
-        id TEXT PRIMARY KEY,
-        receipt_id TEXT,
-        channel TEXT DEFAULT 'POS',
-        order_number TEXT NOT NULL,
-        table_number TEXT,
-        customer_name TEXT,
-        station TEXT NOT NULL,
-        items JSONB NOT NULL,
-        status TEXT DEFAULT 'PENDING',
-        created_at BIGINT NOT NULL,
-        target_ready_at BIGINT NOT NULL,
-        completed_at BIGINT,
-        ticket_data JSONB
-      );
-
-      CREATE TABLE IF NOT EXISTS online_orders (
-        id TEXT PRIMARY KEY,
-        order_number TEXT NOT NULL,
-        channel TEXT DEFAULT 'WEB_STOREFRONT',
-        delivery_type TEXT DEFAULT 'TAKEAWAY',
-        customer_name TEXT NOT NULL,
-        customer_phone TEXT,
-        pickup_time TEXT,
-        subtotal NUMERIC NOT NULL,
-        tax NUMERIC NOT NULL,
-        total NUMERIC NOT NULL,
-        payment_method TEXT,
-        payment_status TEXT,
-        status TEXT DEFAULT 'RECEIVED',
-        items JSONB NOT NULL,
-        created_at BIGINT NOT NULL,
-        order_data JSONB
-      );
-
-      CREATE TABLE IF NOT EXISTS waste_logs (
-        id SERIAL PRIMARY KEY,
-        item_or_ingredient_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        quantity NUMERIC NOT NULL,
-        unit TEXT,
-        cost NUMERIC NOT NULL,
-        reason TEXT NOT NULL,
-        logged_by TEXT,
-        timestamp BIGINT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS temperature_logs (
-        id SERIAL PRIMARY KEY,
-        unit_name TEXT NOT NULL,
-        target_temp_c NUMERIC NOT NULL,
-        actual_temp_c NUMERIC NOT NULL,
-        status TEXT NOT NULL,
-        checked_by TEXT NOT NULL,
-        timestamp BIGINT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS receipts (
-        id TEXT PRIMARY KEY,
-        timestamp BIGINT NOT NULL,
-        subtotal NUMERIC NOT NULL,
-        tax_rate NUMERIC DEFAULT 0.17,
-        tax_amount NUMERIC DEFAULT 0.0,
-        grand_total NUMERIC NOT NULL,
-        employee_name TEXT,
-        customer_name TEXT,
-        ticket_note TEXT,
-        is_refund BOOLEAN DEFAULT FALSE,
-        original_receipt_id TEXT,
-        payments JSONB NOT NULL,
-        items JSONB NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS shifts (
-        id TEXT PRIMARY KEY,
-        employee_name TEXT NOT NULL,
-        start_time BIGINT NOT NULL,
-        end_time BIGINT,
-        starting_cash NUMERIC NOT NULL,
-        cash_payments NUMERIC DEFAULT 0.0,
-        card_payments NUMERIC DEFAULT 0.0,
-        total_refunds NUMERIC DEFAULT 0.0,
-        actual_closing_cash NUMERIC,
-        is_open BOOLEAN DEFAULT TRUE
-      );
-
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        action TEXT NOT NULL,
-        details JSONB,
-        timestamp BIGINT NOT NULL,
-        ip TEXT
-      );
-
-      ALTER TABLE kitchen_orders ADD COLUMN IF NOT EXISTS ticket_data JSONB;
-      ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS order_data JSONB;
-
-      CREATE INDEX IF NOT EXISTS idx_pg_receipts_ts ON receipts (timestamp DESC);
-      CREATE INDEX IF NOT EXISTS idx_pg_items_cat ON items (category_id);
-    `);
-    tablesInitialized = true;
-    console.log("[DB] PostgreSQL schema initialized successfully.");
-  } catch (err) {
-    console.error("[DB] PostgreSQL table init error:", err.message);
+    await tablesInitializationPromise;
   } finally {
-    client.release();
+    if (!tablesInitialized) tablesInitializationPromise = null;
   }
 }
 
@@ -588,6 +583,29 @@ app.use("/api", (req, res, next) => {
   });
 });
 
+// Cloudflare Staging/Production must be backed by the configured PostgreSQL database.
+// This gate prevents any route from reaching demo defaults or local-file fallbacks when
+// Hyperdrive is missing or the persistent schema cannot be initialized.
+app.use("/api", async (req, res, next) => {
+  if (!isCloudflareWorker) return next();
+  try {
+    await initPgTables();
+    if (!pgPool || !tablesInitialized) {
+      return res.status(503).json({
+        error: "Persistent database unavailable.",
+        message: "OpenPOS is not serving business data until PostgreSQL is connected and initialized."
+      });
+    }
+    return next();
+  } catch (error) {
+    console.error("[DB] Cloudflare request gate failed:", error?.code || "UNKNOWN");
+    return res.status(503).json({
+      error: "Persistent database unavailable.",
+      message: "The PostgreSQL schema could not be initialized."
+    });
+  }
+});
+
 // Compatibility middleware name retained for existing route declarations.
 // It now checks server-verified Supabase identity, not a shared API key.
 function requireApiKey(req, res, next) {
@@ -605,18 +623,26 @@ function requireManagerPin(req, res, next) {
 }
 
 // Audit Logger
-function logAudit(action, details, req) {
+async function logAudit(action, details, req) {
   const entry = {
+    id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     timestamp: Date.now(),
     action,
     details: details || {},
     ip: req ? (req.headers['x-forwarded-for'] || req.socket?.remoteAddress) : 'SYSTEM'
   };
+  if (pgPool) {
+    await initPgTables();
+    await upsertOperationalRecord(pgPool, "audit_logs", entry);
+    return entry;
+  }
+  if (isProductionRuntime) throw new Error("Persistent audit storage is unavailable.");
   const store = loadFileData();
   store.auditLogs = store.auditLogs || [];
   store.auditLogs.unshift(entry);
   if (store.auditLogs.length > 100) store.auditLogs = store.auditLogs.slice(0, 100);
   saveFileData(store);
+  return entry;
 }
 
 // -------------------------------------------------------------
@@ -629,7 +655,7 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
   // so they must not consume stock until staff confirms the order.
   // The legacy file-backed recipe/ingredient arrays are demo fallbacks in Vercel.
   // Never mutate them as if they were authoritative production inventory.
-  if (options.depleteInventory !== false && !isVercel) order.items.forEach(orderItem => {
+  if (options.depleteInventory !== false && !isProductionRuntime) order.items.forEach(orderItem => {
     const itemId = orderItem.itemId || orderItem.id;
     const orderQty = Number(orderItem.quantity || orderItem.qty || 1);
     const recipe = db.recipes.find(r => r.itemId === itemId || r.itemName === orderItem.name);
@@ -688,67 +714,74 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
 // -------------------------------------------------------------
 app.get('/api/status', async (req, res) => {
   await initPgTables();
-
-  // A configured pool is not proof that PostgreSQL is reachable. Verify a real
-  // round-trip before reporting persistent storage as available.
   let databaseConnected = false;
-  let databaseError = null;
   if (pgPool) {
     try {
       await pgPool.query('SELECT 1 AS health_check');
       databaseConnected = true;
     } catch (error) {
-      databaseError = error.message;
       console.error("[DB] Health check failed:", error.message);
     }
   }
-
-  const db = loadFileData();
-  let persistentCatalogCounts = null;
+  if (isProductionRuntime && (!pgPool || !tablesInitialized || !databaseConnected)) {
+    return res.status(503).json({
+      status: "degraded",
+      storageEngine: "PostgreSQL unavailable",
+      database: { configured: Boolean(dbUrl), connected: databaseConnected },
+      system: "OpenPOS Restaurant & Cafe Cloud Edition",
+      version: "3.5.0",
+      timestamp: Date.now()
+    });
+  }
+  let storeInfo = null;
+  let counts = { items: 0, categories: 0, receipts: 0, recipes: 0, ingredients: 0, kitchenTickets: 0, onlineOrders: 0 };
   if (databaseConnected) {
     try {
-      const catalogCounts = await pgPool.query(
-        `SELECT
+      storeInfo = await getStoreSettings(pgPool);
+      const result = await pgPool.query(`
+        SELECT
           (SELECT COUNT(*)::int FROM items) AS items,
           (SELECT COUNT(*)::int FROM categories) AS categories,
+          (SELECT COUNT(*)::int FROM receipts) AS receipts,
+          (SELECT COUNT(*)::int FROM recipes) AS recipes,
           (SELECT COUNT(*)::int FROM ingredients) AS ingredients,
-          (SELECT COUNT(*)::int FROM recipes) AS recipes`
-      );
-      persistentCatalogCounts = catalogCounts.rows[0];
+          (SELECT COUNT(*)::int FROM kitchen_orders WHERE status <> 'SERVED') AS kitchen_tickets,
+          (SELECT COUNT(*)::int FROM online_orders) AS online_orders
+      `);
+      const row = result.rows[0] || {};
+      counts = {
+        items: Number(row.items || 0), categories: Number(row.categories || 0),
+        receipts: Number(row.receipts || 0), recipes: Number(row.recipes || 0),
+        ingredients: Number(row.ingredients || 0), kitchenTickets: Number(row.kitchen_tickets || 0),
+        onlineOrders: Number(row.online_orders || 0)
+      };
     } catch (error) {
-      console.error("[DB] Catalog count read failed:", error.message);
-      return res.status(503).json({ status: "degraded", error: "Persistent catalog health check failed." });
+      console.error("[DB] Persistent status read failed:", error.message);
+      return res.status(503).json({ status: "degraded", error: "Persistent status data is unavailable." });
     }
+  } else if (!isProductionRuntime) {
+    const local = loadFileData();
+    storeInfo = local.storeInfo || null;
+    counts = {
+      items: (local.items || []).length, categories: (local.categories || []).length,
+      receipts: (local.receipts || []).length, recipes: (local.recipes || []).length,
+      ingredients: (local.ingredients || []).length,
+      kitchenTickets: (local.kitchenOrders || []).filter(t => t.status !== "SERVED").length,
+      onlineOrders: (local.onlineOrders || []).length
+    };
   }
-  const persistentStorage = databaseConnected;
-  const status = isVercel && !persistentStorage ? "degraded" : "online";
-  res.status(status === "online" ? 200 : 503).json({
-    status,
-    storageEngine: persistentStorage
-      ? "PostgreSQL (connection verified)"
-      : (isVercel ? "Serverless /tmp + Memory (NOT PERSISTENT)" : "Local File System"),
-    database: {
-      configured: Boolean(dbUrl),
-      connected: databaseConnected
-    },
-    ...(databaseError ? { databaseError: "PostgreSQL connection failed" } : {}),
-    platform: isVercel ? "Vercel Serverless" : "Node Server",
+  res.json({
+    status: "online",
+    storageEngine: databaseConnected ? "PostgreSQL (connection verified)" : "Local File System (development only)",
+    database: { configured: Boolean(dbUrl), connected: databaseConnected },
+    platform: isCloudflareWorker ? "Cloudflare Workers" : (isVercel ? "Vercel Serverless" : "Node Server"),
     system: "OpenPOS Restaurant & Cafe Cloud Edition",
     version: "3.5.0",
     timestamp: Date.now(),
-    storeName: db.storeInfo.name,
-    currency: db.storeInfo.currency,
-    taxRate: db.storeInfo.taxRate,
-    counts: {
-      // Catalog, recipes and ingredients counts reflect PostgreSQL in production.
-      items: persistentCatalogCounts ? persistentCatalogCounts.items : (db.items || []).length,
-      categories: persistentCatalogCounts ? persistentCatalogCounts.categories : (db.categories || []).length,
-      receipts: (db.receipts || []).length,
-      recipes: persistentCatalogCounts ? persistentCatalogCounts.recipes : (db.recipes || []).length,
-      ingredients: persistentCatalogCounts ? persistentCatalogCounts.ingredients : (db.ingredients || []).length,
-      kitchenTickets: (db.kitchenOrders || []).filter(t => t.status !== 'SERVED').length,
-      onlineOrders: (db.onlineOrders || []).length
-    }
+    storeName: storeInfo?.name || null,
+    currency: storeInfo?.currency || null,
+    taxRate: storeInfo?.taxRate ?? null,
+    counts
   });
 });
 
@@ -756,17 +789,43 @@ app.post('/api/store', async (req, res) => {
   if (!hasAdminRole(req.authUser)) {
     return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required to change store configuration." });
   }
-
-  const db = loadFileData();
-  const { name, currency, taxRate, address } = req.body;
-  if (name) db.storeInfo.name = name;
-  if (currency) db.storeInfo.currency = currency;
-  if (taxRate !== undefined) db.storeInfo.taxRate = Number(taxRate);
-  if (address) db.storeInfo.address = address;
-  saveFileData(db);
-
-  logAudit("STORE_CONFIG_UPDATED", { name, currency, taxRate }, req);
-  res.json({ success: true, storeInfo: db.storeInfo });
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ error: "Persistent store settings are unavailable." });
+  }
+  const { name, currency, taxRate, address } = req.body || {};
+  let storeInfo;
+  if (pgPool) {
+    try {
+      const current = await getStoreSettings(pgPool) || {};
+      const updated = { ...current };
+      if (name !== undefined) updated.name = String(name);
+      if (currency !== undefined) updated.currency = String(currency);
+      if (taxRate !== undefined) {
+        const parsedTaxRate = Number(taxRate);
+        if (!Number.isFinite(parsedTaxRate) || parsedTaxRate < 0 || parsedTaxRate > 100) {
+          return res.status(400).json({ error: "taxRate must be between 0 and 100." });
+        }
+        updated.taxRate = parsedTaxRate;
+      }
+      if (address !== undefined) updated.address = String(address);
+      storeInfo = await saveStoreSettings(pgPool, updated);
+    } catch (error) {
+      console.error("[DB] Store settings save failed:", error.message);
+      return res.status(503).json({ error: "Store settings could not be saved." });
+    }
+  } else {
+    const db = loadFileData();
+    if (name !== undefined) db.storeInfo.name = name;
+    if (currency !== undefined) db.storeInfo.currency = currency;
+    if (taxRate !== undefined) db.storeInfo.taxRate = Number(taxRate);
+    if (address !== undefined) db.storeInfo.address = address;
+    saveFileData(db);
+    storeInfo = db.storeInfo;
+  }
+  try { await logAudit("STORE_CONFIG_UPDATED", { name, currency, taxRate }, req); }
+  catch (error) { console.error("[Audit] Store config audit write failed:", error.message); }
+  res.json({ success: true, storeInfo });
 });
 
 // -------------------------------------------------------------
@@ -774,81 +833,75 @@ app.post('/api/store', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/stats', async (req, res) => {
   await initPgTables();
-  const db = loadFileData();
-  let receipts = db.receipts || [];
   const period = req.query.period || 'all';
   const now = new Date();
-
-  if (req.query.from && req.query.to) {
-    const fromTs = Number(req.query.from);
-    const toTs = Number(req.query.to);
-    receipts = receipts.filter(r => r.timestamp >= fromTs && r.timestamp <= toTs);
+  let fromTs;
+  let toTs;
+  if (req.query.from !== undefined || req.query.to !== undefined) {
+    fromTs = Number(req.query.from);
+    toTs = Number(req.query.to);
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs > toTs) {
+      return res.status(400).json({ error: "A valid from/to timestamp range is required." });
+    }
   } else if (period === 'today') {
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfDay);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   } else if (period === 'yesterday') {
-    const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
-    const endOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - 1;
-    receipts = receipts.filter(r => r.timestamp >= startOfYesterday && r.timestamp <= endOfYesterday);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+    toTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - 1;
   } else if (period === 'week') {
-    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfWeek);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
   } else if (period === 'month') {
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfMonth);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }
+  let receipts;
+  try {
+    if (pgPool) receipts = await listReceipts(pgPool, { from: fromTs, to: toTs });
+    else if (isProductionRuntime) return res.status(503).json({ error: "Persistent analytics data is unavailable." });
+    else {
+      receipts = (loadFileData().receipts || []).filter(receipt =>
+        (fromTs === undefined || receipt.timestamp >= fromTs) &&
+        (toTs === undefined || receipt.timestamp <= toTs)
+      );
+    }
+  } catch (error) {
+    console.error("[Analytics] Receipt query failed:", error.message);
+    return res.status(503).json({ error: "Sales analytics are temporarily unavailable." });
   }
 
-  const getReceiptTotal = r => Number(r.grandTotal !== undefined ? r.grandTotal : (r.total !== undefined ? r.total : (r.totalAmount || 0)));
-  const totalRevenue = receipts.reduce((sum, r) => sum + getReceiptTotal(r), 0);
+  const getReceiptTotal = receipt => Number(receipt.grandTotal !== undefined ? receipt.grandTotal : (receipt.total !== undefined ? receipt.total : (receipt.totalAmount || 0)));
+  const totalRevenue = receipts.reduce((sum, receipt) => sum + getReceiptTotal(receipt), 0);
   const totalOrders = receipts.length;
-  const averageTicket = totalOrders > 0 ? (totalRevenue / totalOrders) : 0;
-
-  let cashSales = 0;
-  let cardSales = 0;
-  let refundTotal = 0;
-
-  receipts.forEach(r => {
-    const rTot = getReceiptTotal(r);
-    if (r.isRefund) refundTotal += Math.abs(rTot);
-    if (Array.isArray(r.payments) && r.payments.length > 0) {
-      r.payments.forEach(p => {
-        const amt = Number(p.amount) || 0;
-        if (p.type === 'CASH' || p.type === 'מזומן') cashSales += amt;
-        else if (p.type === 'CARD' || p.type === 'אשראי') cardSales += amt;
-        else cashSales += amt;
+  const averageTicket = totalOrders ? totalRevenue / totalOrders : 0;
+  let cashSales = 0, cardSales = 0, refundTotal = 0;
+  receipts.forEach(receipt => {
+    const total = getReceiptTotal(receipt);
+    if (receipt.isRefund) refundTotal += Math.abs(total);
+    if (Array.isArray(receipt.payments) && receipt.payments.length) {
+      receipt.payments.forEach(payment => {
+        const amount = Number(payment.amount) || 0;
+        if (payment.type === 'CASH' || payment.type === 'מזומן') cashSales += amount;
+        else if (payment.type === 'CARD' || payment.type === 'אשראי') cardSales += amount;
+        else cashSales += amount;
       });
-    } else {
-      cashSales += rTot;
-    }
+    } else cashSales += total;
   });
-
   const hourlySales = {};
-  for (let i = 0; i < 24; i++) {
-    hourlySales[`${String(i).padStart(2, '0')}:00`] = 0;
-  }
-  receipts.forEach(r => {
-    const d = new Date(r.timestamp);
-    const h = `${String(d.getHours()).padStart(2, '0')}:00`;
-    if (hourlySales[h] !== undefined) hourlySales[h] += getReceiptTotal(r);
+  for (let hour = 0; hour < 24; hour++) hourlySales[`${String(hour).padStart(2, '0')}:00`] = 0;
+  receipts.forEach(receipt => {
+    const hour = `${String(new Date(receipt.timestamp).getHours()).padStart(2, '0')}:00`;
+    hourlySales[hour] += getReceiptTotal(receipt);
   });
-
   const productSalesCount = {};
-  receipts.forEach(r => {
-    if (Array.isArray(r.items)) {
-      r.items.forEach(ci => {
-        const name = ci.name || ci.itemName || (ci.item && ci.item.name) || "Item";
-        const qty = Number(ci.quantity !== undefined ? ci.quantity : (ci.qty || 1));
-        productSalesCount[name] = (productSalesCount[name] || 0) + qty;
-      });
-    }
-  });
-
+  receipts.forEach(receipt => (Array.isArray(receipt.items) ? receipt.items : []).forEach(line => {
+    const name = line.name || line.itemName || line.item?.name || "Item";
+    const quantity = Number(line.quantity !== undefined ? line.quantity : (line.qty || 1));
+    productSalesCount[name] = (productSalesCount[name] || 0) + quantity;
+  }));
   const topSelling = Object.entries(productSalesCount)
     .map(([name, qty]) => ({ name, qty }))
-    .sort((a, b) => b.qty - a.qty)
+    .sort((left, right) => right.qty - left.qty)
     .slice(0, 6);
-
-  res.json({
+  return res.json({
     filterPeriod: period,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     totalOrders,
@@ -910,7 +963,7 @@ async function deletePgItem(id) {
 // -------------------------------------------------------------
 app.get('/api/categories', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) return res.json(await listPgCategories());
     const db = loadFileData();
@@ -923,7 +976,7 @@ app.get('/api/categories', async (req, res) => {
 
 app.post('/api/categories', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   const { name, color } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "Category name is required." });
   const newCat = {
@@ -948,7 +1001,7 @@ app.post('/api/categories', requireApiKey, async (req, res) => {
 
 app.get('/api/items', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) return res.json(await listPgItems());
     const db = loadFileData();
@@ -961,7 +1014,7 @@ app.get('/api/items', async (req, res) => {
 
 app.post('/api/items', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   const item = req.body || {};
   if (!item.name || typeof item.name !== "string" || !item.name.trim() ||
       item.price === undefined || !Number.isFinite(Number(item.price)) || Number(item.price) < 0) {
@@ -999,7 +1052,7 @@ app.post('/api/items', requireApiKey, async (req, res) => {
 
 app.delete('/api/items/:id', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) await deletePgItem(req.params.id);
     else {
@@ -1019,7 +1072,7 @@ app.delete('/api/items/:id', requireApiKey, async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/ingredients', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   try {
     if (pgPool) return res.json(await listIngredients(pgPool));
     const db = loadFileData();
@@ -1032,7 +1085,7 @@ app.get('/api/ingredients', async (req, res) => {
 
 app.post('/api/ingredients', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   const db = pgPool ? null : loadFileData();
   const { id, name, unit, unitCost, currentStock, minThreshold } = req.body;
   const cost = Number(unitCost);
@@ -1066,7 +1119,7 @@ app.post('/api/ingredients', requireApiKey, async (req, res) => {
 
 app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   const { change, newStock, reason } = req.body;
   if ((newStock === undefined && change === undefined) ||
       (newStock !== undefined && (!Number.isFinite(Number(newStock)) || Number(newStock) < 0)) ||
@@ -1087,7 +1140,7 @@ app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
       }
     }
     if (!ing) return res.status(404).json({ error: "Ingredient not found." });
-    logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
+    await logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
     return res.json({ success: true, ingredient: ing });
   } catch (error) {
     console.error("[DB] Ingredient stock update failed:", error.message);
@@ -1100,7 +1153,7 @@ app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/recipes', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
   try {
     if (pgPool) return res.json(await listRecipes(pgPool));
     const db = loadFileData();
@@ -1113,7 +1166,7 @@ app.get('/api/recipes', async (req, res) => {
 
 app.post('/api/recipes', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
   const { itemId, itemName, station, prepTimeMinutes, ingredients, laborCost, allergens, instructions } = req.body;
   if (!itemId || !Array.isArray(ingredients) ||
       ingredients.some(ing => !ing || !ing.ingredientId || !Number.isFinite(Number(ing.quantity)) || Number(ing.quantity) <= 0)) {
@@ -1158,12 +1211,13 @@ app.post('/api/recipes', requireApiKey, async (req, res) => {
 
 app.get('/api/recipes/profitability', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
-  const db = pgPool ? loadFileData() : loadFileData();
-  let items = db.items || [];
-  let categories = db.categories || [];
-  let ingredients = db.ingredients || [];
-  let recipes = db.recipes || [];
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
+  const db = pgPool ? null : loadFileData();
+  let items = db?.items || [];
+  let categories = db?.categories || [];
+  let ingredients = db?.ingredients || [];
+  let recipes = db?.recipes || [];
   try {
     if (pgPool) {
       [items, categories, ingredients, recipes] = await Promise.all([
@@ -1239,7 +1293,7 @@ app.get('/api/recipes/profitability', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/kitchen/tickets', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   if (pgPool) {
     try { return res.json(await listKitchenTickets(pgPool, req.query)); }
     catch (error) { console.error("[DB] KDS ticket read failed:", error.message); return res.status(503).json({ error: "Could not read persistent kitchen tickets." }); }
@@ -1254,7 +1308,7 @@ app.get('/api/kitchen/tickets', async (req, res) => {
 
 app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
   if (!items || !station) return res.status(400).json({ error: "station and items are required." });
   const now = Date.now();
@@ -1279,7 +1333,7 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!["PENDING", "PREPARING", "READY", "SERVED"].includes(status)) return res.status(400).json({ error: "Invalid ticket status." });
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   if (pgPool) {
     try {
       const completedAt = status === "READY" || status === "SERVED" ? Date.now() : null;
@@ -1301,7 +1355,7 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/online-orders', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   if (pgPool) {
     try { return res.json(await listOnlineOrders(pgPool)); }
     catch (error) { console.error("[DB] Online order read failed:", error.message); return res.status(503).json({ error: "Could not read persistent online orders." }); }
@@ -1312,8 +1366,9 @@ app.get('/api/online-orders', async (req, res) => {
 
 app.post('/api/online-orders', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
-  const db = loadFileData();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  const db = pgPool ? null : (isProductionRuntime ? null : loadFileData());
+  if (isProductionRuntime && !pgPool) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
 
   if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -1327,7 +1382,7 @@ app.post('/api/online-orders', async (req, res) => {
     orderItems = await buildOnlineOrderItems({
       pool: pgPool,
       requestedItems: items,
-      localCatalog: isVercel ? [] : (db.items || [])
+      localCatalog: isProductionRuntime ? [] : (db.items || [])
     });
   } catch (error) {
     if (error.code === "INVALID_ORDER_ITEM") {
@@ -1338,7 +1393,17 @@ app.post('/api/online-orders', async (req, res) => {
   }
 
   const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
+  let storeSettings;
+  try {
+    storeSettings = pgPool ? await getStoreSettings(pgPool) : db?.storeInfo;
+  } catch (error) {
+    console.error("[DB] Online order store settings read failed:", error.message);
+    return res.status(503).json({ error: "Store tax settings are temporarily unavailable." });
+  }
+  if (!storeSettings || !Number.isFinite(Number(storeSettings.taxRate))) {
+    return res.status(503).json({ error: "Store tax settings have not been configured." });
+  }
+  const tax = Math.round(subtotal * (Number(storeSettings.taxRate) / 100) * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   const now = Date.now();
   const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
@@ -1386,7 +1451,7 @@ app.post('/api/online-orders', async (req, res) => {
     console.error("[DB] Atomic online order/KDS insert failed:", error.message);
     return res.status(503).json({ error: "The order could not be safely saved. Please retry." });
   }
-  logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
+  try { await logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req); } catch (error) { console.error("[Audit] Online order audit write failed:", error.message); }
   res.json({ success: true, order, kitchenTickets: tickets.length });
 });
 
@@ -1394,7 +1459,7 @@ app.post('/api/online-orders/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!["RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "Invalid order status." });
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   if (pgPool) {
     try {
       const order = await updateOnlineOrderStatus(pgPool, req.params.id, status);
@@ -1413,102 +1478,207 @@ app.post('/api/online-orders/:id/status', async (req, res) => {
 // 8. Food Waste & Spoilage Reporting API
 // -------------------------------------------------------------
 app.get('/api/waste', async (req, res) => {
-  const db = loadFileData();
-  const logs = db.wasteLogs || [];
-  const totalLoss = logs.reduce((sum, w) => sum + (Number(w.cost) || 0), 0);
-  res.json({
-    totalWasteCost: Math.round(totalLoss * 100) / 100,
-    currency: db.storeInfo.currency,
-    logs
-  });
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  try {
+    const logs = pgPool
+      ? await listOperationalRecords(pgPool, "waste_logs")
+      : (loadFileData().wasteLogs || []);
+    const settings = pgPool ? await getStoreSettings(pgPool) : loadFileData().storeInfo;
+    const totalLoss = logs.reduce((sum, entry) => sum + (Number(entry.cost) || 0), 0);
+    return res.json({ totalWasteCost: Math.round(totalLoss * 100) / 100, currency: settings?.currency || null, logs });
+  } catch (error) {
+    console.error("[DB] Waste-log read failed:", error.message);
+    return res.status(503).json({ error: "Waste logs are temporarily unavailable." });
+  }
 });
 
 app.post('/api/waste', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body;
-
-  if (!name || quantity === undefined) {
-    return res.status(400).json({ error: "name and quantity are required." });
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body || {};
+  const parsedQuantity = Number(quantity);
+  const parsedCost = Number(cost || 0);
+  if (!name || quantity === undefined || !Number.isFinite(parsedQuantity) || parsedQuantity <= 0 ||
+      !Number.isFinite(parsedCost) || parsedCost < 0) {
+    return res.status(400).json({ error: "A valid name, positive quantity and non-negative cost are required." });
   }
-
   const wasteEntry = {
-    id: Date.now(),
+    id: `waste_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     itemOrIngredientId: itemOrIngredientId || "generic",
-    name: name.trim(),
-    quantity: Number(quantity),
-    unit: unit || "units",
-    cost: Number(cost || 0),
-    reason: reason || "EXPIRED", // EXPIRED, OVERPREP, MISTAKE, STORAGE_FAIL, RETURN
-    loggedBy: loggedBy || "Manager",
+    name: String(name).trim(), quantity: parsedQuantity, unit: unit || "units",
+    cost: parsedCost, reason: reason || "EXPIRED", loggedBy: loggedBy || "Manager",
     timestamp: Date.now()
   };
-
-  db.wasteLogs = db.wasteLogs || [];
-  db.wasteLogs.unshift(wasteEntry);
-
-  // Auto-deduct from stock if matching ingredient or item found
-  const ing = (db.ingredients || []).find(i => i.id === itemOrIngredientId || i.name === name);
-  if (ing) {
-    ing.currentStock = Math.max(0, ing.currentStock - wasteEntry.quantity);
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query("BEGIN");
+      await upsertOperationalRecord(client, "waste_logs", wasteEntry);
+      const ingredientResult = await client.query(
+        "SELECT id FROM ingredients WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1",
+        [itemOrIngredientId || null, String(name).trim()]
+      );
+      if (ingredientResult.rowCount) {
+        await updateIngredientStock(client, ingredientResult.rows[0].id, { change: -parsedQuantity });
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("[DB] Waste-log transaction failed:", error.message);
+      return res.status(503).json({ error: "Waste log and inventory adjustment could not be saved." });
+    } finally { client.release(); }
+  } else {
+    const db = loadFileData();
+    db.wasteLogs = db.wasteLogs || [];
+    db.wasteLogs.unshift(wasteEntry);
+    const ingredient = (db.ingredients || []).find(item => item.id === itemOrIngredientId || item.name === name);
+    if (ingredient) ingredient.currentStock = Math.max(0, ingredient.currentStock - parsedQuantity);
+    saveFileData(db);
   }
+  try { await logAudit("FOOD_WASTE_LOGGED", wasteEntry, req); } catch (error) {
+    console.error("[Audit] Waste log audit write failed:", error.message);
+  }
+  return res.json({ success: true, wasteEntry });
+});
 
-  saveFileData(db);
-  logAudit("FOOD_WASTE_LOGGED", wasteEntry, req);
-  res.json({ success: true, wasteEntry });
+// -------------------------------------------------------------
+// Shift management — PostgreSQL is authoritative in production
+// -------------------------------------------------------------
+app.get('/api/shifts', async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  try {
+    const shifts = pgPool
+      ? await listShifts(pgPool, { openOnly: req.query.openOnly === "true", limit: req.query.limit })
+      : (loadFileData().shifts || []);
+    return res.json(shifts);
+  } catch (error) {
+    console.error("[Shifts] List failed:", error.message);
+    return res.status(503).json({ error: "Shifts are temporarily unavailable." });
+  }
+});
+
+app.get('/api/shifts/current', async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  try {
+    const employeeName = typeof req.query.employeeName === "string" ? req.query.employeeName.trim() : null;
+    const shift = pgPool
+      ? await getOpenShift(pgPool, employeeName)
+      : (loadFileData().shifts || []).find(item => item.isOpen && (!employeeName || item.employeeName === employeeName)) || null;
+    return res.json({ shift });
+  } catch (error) {
+    console.error("[Shifts] Current shift lookup failed:", error.message);
+    return res.status(503).json({ error: "Current shift is temporarily unavailable." });
+  }
+});
+
+app.post('/api/shifts/start', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  const { employeeName, startingCash } = req.body || {};
+  if (!String(employeeName || "").trim() || !Number.isFinite(Number(startingCash)) || Number(startingCash) < 0) {
+    return res.status(400).json({ error: "A valid employeeName and non-negative startingCash are required." });
+  }
+  try {
+    if (pgPool) {
+      const existing = await getOpenShift(pgPool, String(employeeName).trim());
+      if (existing) return res.status(409).json({ error: "This employee already has an open shift.", shift: existing });
+      const shift = await startShift(pgPool, {
+        id: `shift_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        employeeName, startingCash, startTime: Date.now()
+      });
+      await logAudit("SHIFT_STARTED", { shiftId: shift.id, employeeName: shift.employeeName }, req);
+      return res.status(201).json({ success: true, shift });
+    }
+    const db = loadFileData();
+    db.shifts = db.shifts || [];
+    if (db.shifts.some(item => item.isOpen && item.employeeName === String(employeeName).trim())) {
+      return res.status(409).json({ error: "This employee already has an open shift." });
+    }
+    const shift = { id: `shift_${Date.now()}`, employeeName: String(employeeName).trim(), startTime: Date.now(), endTime: null, startingCash: Number(startingCash), cashPayments: 0, cardPayments: 0, totalRefunds: 0, actualClosingCash: null, isOpen: true };
+    db.shifts.unshift(shift);
+    saveFileData(db);
+    return res.status(201).json({ success: true, shift });
+  } catch (error) {
+    console.error("[Shifts] Start failed:", error.message);
+    return res.status(503).json({ error: "Shift could not be started." });
+  }
+});
+
+app.post('/api/shifts/:id/close', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  const actualClosingCash = Number(req.body?.actualClosingCash);
+  if (!Number.isFinite(actualClosingCash) || actualClosingCash < 0) {
+    return res.status(400).json({ error: "A non-negative actualClosingCash is required." });
+  }
+  try {
+    let shift;
+    if (pgPool) {
+      shift = await closeShift(pgPool, { id: req.params.id, endTime: Date.now(), actualClosingCash });
+      if (!shift) return res.status(404).json({ error: "Open shift not found." });
+      await logAudit("SHIFT_CLOSED", { shiftId: shift.id, employeeName: shift.employeeName, actualClosingCash }, req);
+    } else {
+      const db = loadFileData();
+      const record = (db.shifts || []).find(item => item.id === req.params.id && item.isOpen);
+      if (!record) return res.status(404).json({ error: "Open shift not found." });
+      record.endTime = Date.now();
+      record.actualClosingCash = actualClosingCash;
+      record.isOpen = false;
+      saveFileData(db);
+      shift = record;
+    }
+    return res.json({ success: true, shift });
+  } catch (error) {
+    console.error("[Shifts] Close failed:", error.message);
+    return res.status(503).json({ error: "Shift could not be closed." });
+  }
 });
 
 // -------------------------------------------------------------
 // 9. Smart Staffing & Shift Demand Forecast API
 // -------------------------------------------------------------
 app.get('/api/forecast', async (req, res) => {
-  const db = loadFileData();
-  const receipts = db.receipts || [];
+  await initPgTables();
   const now = new Date();
-
-  // Hourly order density estimation
-  const hourlyCount = {};
-  for (let h = 7; h <= 22; h++) {
-    hourlyCount[`${String(h).padStart(2, '0')}:00`] = 0;
-  }
-
-  receipts.forEach(r => {
-    const d = new Date(r.timestamp);
-    const hStr = `${String(d.getHours()).padStart(2, '0')}:00`;
-    if (hourlyCount[hStr] !== undefined) hourlyCount[hStr]++;
-  });
-
-  const hourlyForecast = Object.entries(hourlyCount).map(([hour, count]) => {
-    const predictedOrders = Math.max(count * 2, Math.floor(8 + Math.random() * 12));
-    let baristas = 1;
-    let kitchenCooks = 1;
-    let floorStaff = 1;
-
-    if (predictedOrders > 25) {
-      baristas = 3;
-      kitchenCooks = 2;
-      floorStaff = 3;
-    } else if (predictedOrders > 15) {
-      baristas = 2;
-      kitchenCooks = 2;
-      floorStaff = 2;
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  const since = now.getTime() - sevenDays;
+  let hourlyCounts = Array(24).fill(0);
+  try {
+    if (pgPool) {
+      const observed = await getHourlyReceiptCounts(pgPool, since);
+      observed.forEach(row => { if (row.hour >= 0 && row.hour < 24) hourlyCounts[row.hour] = row.orders; });
+    } else if (isProductionRuntime) {
+      return res.status(503).json({ error: "Persistent forecast data is unavailable." });
+    } else {
+      (loadFileData().receipts || []).filter(receipt => Number(receipt.timestamp) >= since && !receipt.isRefund)
+        .forEach(receipt => { const hour = new Date(receipt.timestamp).getHours(); hourlyCounts[hour]++; });
     }
-
-    return {
-      hour,
+  } catch (error) {
+    console.error("[Forecast] Receipt history query failed:", error.message);
+    return res.status(503).json({ error: "Forecast data is temporarily unavailable." });
+  }
+  const hourlyForecast = [];
+  for (let hour = 7; hour <= 22; hour++) {
+    const predictedOrders = Math.round(hourlyCounts[hour] / 7);
+    let baristas = 0, kitchenCooks = 0, floorStaff = 0;
+    if (predictedOrders > 25) { baristas = 3; kitchenCooks = 2; floorStaff = 3; }
+    else if (predictedOrders > 15) { baristas = 2; kitchenCooks = 2; floorStaff = 2; }
+    else if (predictedOrders > 0) { baristas = 1; kitchenCooks = 1; floorStaff = 1; }
+    hourlyForecast.push({
+      hour: `${String(hour).padStart(2, '0')}:00`,
       predictedOrders,
-      recommendedStaff: {
-        total: baristas + kitchenCooks + floorStaff,
-        baristas,
-        kitchenCooks,
-        floorStaff
-      }
-    };
-  });
-
-  res.json({
+      recommendedStaff: { total: baristas + kitchenCooks + floorStaff, baristas, kitchenCooks, floorStaff }
+    });
+  }
+  const peak = hourlyForecast.reduce((best, current) => current.predictedOrders > best.predictedOrders ? current : best, hourlyForecast[0]);
+  return res.json({
     day: now.toLocaleDateString(undefined, { weekday: 'long' }),
-    totalPredictedOrders: hourlyForecast.reduce((s, h) => s + h.predictedOrders, 0),
-    peakHour: "12:00",
+    historicalWindowDays: 7,
+    totalPredictedOrders: hourlyForecast.reduce((sum, hour) => sum + hour.predictedOrders, 0),
+    peakHour: peak?.predictedOrders > 0 ? peak.hour : null,
     hourlyForecast
   });
 });
@@ -1517,57 +1687,91 @@ app.get('/api/forecast', async (req, res) => {
 // 10. Food Safety & Daily Checklists API
 // -------------------------------------------------------------
 app.get('/api/safety/temperature', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.temperatureLogs || []);
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  try {
+    return res.json(pgPool
+      ? await listOperationalRecords(pgPool, "temperature_logs")
+      : (loadFileData().temperatureLogs || []));
+  } catch (error) {
+    console.error("[DB] Temperature-log read failed:", error.message);
+    return res.status(503).json({ error: "Temperature logs are temporarily unavailable." });
+  }
 });
 
 app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { unitName, targetTempC, actualTempC, checkedBy } = req.body;
-  if (!unitName || actualTempC === undefined) {
-    return res.status(400).json({ error: "unitName and actualTempC are required." });
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  const { unitName, targetTempC, actualTempC, checkedBy } = req.body || {};
+  if (!unitName || actualTempC === undefined || !Number.isFinite(Number(actualTempC))) {
+    return res.status(400).json({ error: "unitName and a valid actualTempC are required." });
   }
-
   const actual = Number(actualTempC);
-  const target = Number(targetTempC || 4.0);
-  let status = "NORMAL";
-  if (actual > target + 2) status = "CRITICAL";
-  else if (actual > target) status = "WARNING";
-
+  const target = targetTempC === undefined ? 4 : Number(targetTempC);
+  if (!Number.isFinite(target)) return res.status(400).json({ error: "targetTempC must be a number." });
   const log = {
-    id: Date.now(),
-    unitName: unitName.trim(),
-    targetTempC: target,
-    actualTempC: actual,
-    status,
-    checkedBy: checkedBy || "Staff Member",
-    timestamp: Date.now()
+    id: `temperature_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    unitName: String(unitName).trim(), targetTempC: target, actualTempC: actual,
+    status: actual > target + 2 ? "CRITICAL" : (actual > target ? "WARNING" : "NORMAL"),
+    checkedBy: checkedBy || "Staff Member", timestamp: Date.now()
   };
-
-  db.temperatureLogs = db.temperatureLogs || [];
-  db.temperatureLogs.unshift(log);
-  saveFileData(db);
-  res.json({ success: true, log });
+  try {
+    if (pgPool) await upsertOperationalRecord(pgPool, "temperature_logs", log);
+    else {
+      const db = loadFileData();
+      db.temperatureLogs = db.temperatureLogs || [];
+      db.temperatureLogs.unshift(log);
+      saveFileData(db);
+    }
+    return res.json({ success: true, log });
+  } catch (error) {
+    console.error("[DB] Temperature-log save failed:", error.message);
+    return res.status(503).json({ error: "Temperature log could not be saved." });
+  }
 });
 
 app.get('/api/safety/checklists', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.checklists || []);
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  try {
+    return res.json(pgPool
+      ? await listOperationalRecords(pgPool, "checklists")
+      : (loadFileData().checklists || []));
+  } catch (error) {
+    console.error("[DB] Checklist read failed:", error.message);
+    return res.status(503).json({ error: "Checklists are temporarily unavailable." });
+  }
 });
 
 app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { itemId, done } = req.body;
-  const list = (db.checklists || []).find(c => c.id === req.params.id);
-  if (!list) return res.status(404).json({ error: "Checklist not found." });
-
-  const item = list.items.find(i => i.id === itemId);
-  if (item) {
-    item.done = !!done;
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  const { itemId, done } = req.body || {};
+  try {
+    if (pgPool) {
+      const lists = await listOperationalRecords(pgPool, "checklists", 1000);
+      const list = lists.find(entry => String(entry.id) === String(req.params.id));
+      if (!list) return res.status(404).json({ error: "Checklist not found." });
+      const item = (list.items || []).find(entry => String(entry.id) === String(itemId));
+      if (!item) return res.status(404).json({ error: "Checklist item not found." });
+      item.done = Boolean(done);
+      item.time = done ? new Date().toISOString() : null;
+      await upsertOperationalRecord(pgPool, "checklists", list);
+      return res.json({ success: true, checklist: list });
+    }
+    const db = loadFileData();
+    const list = (db.checklists || []).find(entry => entry.id === req.params.id);
+    if (!list) return res.status(404).json({ error: "Checklist not found." });
+    const item = (list.items || []).find(entry => entry.id === itemId);
+    if (!item) return res.status(404).json({ error: "Checklist item not found." });
+    item.done = Boolean(done);
     item.time = done ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    saveFileData(db);
+    return res.json({ success: true, checklist: list });
+  } catch (error) {
+    console.error("[DB] Checklist update failed:", error.message);
+    return res.status(503).json({ error: "Checklist update could not be saved." });
   }
-  saveFileData(db);
-  res.json({ success: true, checklist: list });
 });
 
 // -------------------------------------------------------------
@@ -1575,7 +1779,10 @@ app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) =>
 // -------------------------------------------------------------
 app.post('/api/sync', requireApiKey, async (req, res) => {
   await initPgTables();
-  const db = loadFileData();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ success: false, error: "Persistent POS sync storage is unavailable." });
+  }
+  const db = pgPool ? null : loadFileData();
   const body = req.body || {};
   const events = Array.isArray(body.events) ? body.events : [];
   const acknowledgedIds = [];
@@ -1583,18 +1790,15 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
   console.log(`[CloudSync] Incoming sync packet from ${body.client || 'POS'} with ${events.length} delta events`);
 
   for (const ev of events) {
-    const eventId = ev.id;
-    const type = ev.type;
-    let payload = ev.payload;
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload);
-      } catch (_) {
-        payload = {};
-      }
+    const validation = validateSyncEvent(ev);
+    if (!validation.valid) {
+      return res.status(validation.status).json({
+        success: false,
+        error: validation.error,
+        acknowledgedIds
+      });
     }
-
-    if (!payload || typeof payload !== 'object') continue;
+    const { id: eventId, type, payload } = validation;
 
     if (type === 'RECEIPT_CREATED' || type === 'RECEIPT_REFUNDED') {
       const gTot = Number(payload.grandTotal !== undefined ? payload.grandTotal : (payload.total !== undefined ? payload.total : 0));
@@ -1617,7 +1821,7 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
 
       // PostgreSQL Production: receipt, recipe stock depletion and KDS tickets
       // commit together. A failure leaves the event unacknowledged for safe retry.
-      if (isVercel && !pgPool) {
+      if (isProductionRuntime && !pgPool) {
         return res.status(503).json({
           success: false,
           error: "Persistent POS storage is unavailable; receipt was not acknowledged.",
@@ -1641,29 +1845,38 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
       }
 
       // Keep the local development fallback, but never use it as Production storage.
-      const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
-      if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
-      else db.receipts.unshift(receipt);
+      if (db) {
+        const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
+        if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
+        else db.receipts.unshift(receipt);
+      }
 
       if (!pgPool && !receipt.isRefund) {
         processRecipeDepletionAndKDS(receipt, db);
       }
 
       acknowledgedIds.push(eventId);
-    } else {
-      acknowledgedIds.push(eventId);
     }
   }
 
-  saveFileData(db);
-
+  if (db) saveFileData(db);
+  let items = db?.items || [];
+  let categories = db?.categories || [];
+  if (pgPool) {
+    try {
+      [items, categories] = await Promise.all([listPgItems(), listPgCategories()]);
+    } catch (error) {
+      console.error("[CloudSync] Catalog snapshot query failed:", error.message);
+      return res.status(503).json({ success: false, error: "Sync was stored, but the catalog snapshot is unavailable.", acknowledgedIds });
+    }
+  }
   res.json({
     success: true,
     message: "Delta sync completed successfully",
     syncedAt: Date.now(),
     acknowledgedIds,
-    items: db.items,
-    categories: db.categories
+    items,
+    categories
   });
 });
 
@@ -1696,7 +1909,7 @@ async function listReceiptsForApi() {
       items: typeof row.items === "string" ? JSON.parse(row.items) : (row.items || [])
     }));
   }
-  if (isVercel) throw new Error("Persistent receipt storage is unavailable.");
+  if (isProductionRuntime) throw new Error("Persistent receipt storage is unavailable.");
   const db = loadFileData();
   return [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 }
@@ -1739,35 +1952,49 @@ app.get('/api/export/receipts', async (req, res) => {
 });
 
 app.get('/api/export/items', async (req, res) => {
-  const db = loadFileData();
-  const items = db.items || [];
+  await initPgTables();
+  let items;
+  try {
+    if (pgPool) items = await listPgItems();
+    else if (isProductionRuntime) return res.status(503).json({ error: "Persistent catalog export is unavailable." });
+    else items = loadFileData().items || [];
+  } catch (error) {
+    console.error("[Catalog] Item export failed:", error.message);
+    return res.status(503).json({ error: "Catalog export is temporarily unavailable." });
+  }
+  const csvEscape = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
   let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\n";
-
-  items.forEach(i => {
-    csv += `"${i.id}","${i.name}",${i.price},"${i.categoryId || ''}","${i.barcode || ''}",${i.stockQuantity || 0},"${i.station || 'HOT_KITCHEN'}",${i.prepTimeMinutes || 5}\n`;
+  items.forEach(item => {
+    csv += [
+      csvEscape(item.id), csvEscape(item.name), Number(item.price) || 0,
+      csvEscape(item.categoryId || ""), csvEscape(item.barcode || ""),
+      Number(item.stockQuantity) || 0, csvEscape(item.station || ""),
+      Number(item.prepTimeMinutes) || 0
+    ].join(",") + "\n";
   });
-
-  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="openpos_catalog_export.csv"');
-  res.send(csv);
+  return res.send(csv);
 });
 
 // -------------------------------------------------------------
 // 13. Danger Zone Reset
 // -------------------------------------------------------------
 app.post('/api/reset', requireManagerPin, async (req, res) => {
-  await initPgTables();
-  if (pgPool) {
-    try {
-      await pgPool.query('TRUNCATE TABLE receipts, items, categories, shifts, audit_logs');
-    } catch (_) {}
+  // Destructive reset is intentionally disabled until a verified backup/export,
+  // explicit confirmation workflow, and complete tenant-scoped reset are implemented.
+  try {
+    await logAudit("STORE_RESET_BLOCKED", {
+      reason: "Reset endpoint is disabled to protect production data."
+    }, req);
+  } catch (error) {
+    console.error("[Audit] Blocked reset audit write failed:", error.message);
   }
-
-  const db = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  saveFileData(db);
-  logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req);
-
-  res.json({ success: true, message: "All cloud store data reset to clean restaurant default template." });
+  return res.status(409).json({
+    success: false,
+    error: "Store reset is temporarily disabled to protect existing business data. No data was deleted."
+  });
 });
 
+app.configureDatabase = configureDatabase;
 module.exports = app;

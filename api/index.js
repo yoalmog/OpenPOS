@@ -8,7 +8,7 @@ const app = express();
 // Supabase is the sole API identity provider. Missing configuration fails closed.
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
+const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "b245f371-9154-4dd3-aa4c-a5fb5266e5d3";
 
 // Determine environment
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -507,6 +507,16 @@ async function initPgTables() {
 // Middleware: CORS & Body Parser
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// Public bootstrap endpoint: only the Supabase project URL and anon key are exposed.
+app.get("/api/auth-config", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({
+    configured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
+    supabaseUrl: SUPABASE_URL,
+    supabaseAnonKey: SUPABASE_ANON_KEY
+  });
+});
 
 // Validate every API request against Supabase Auth. Never trust a client-supplied role.
 async function requireSupabaseAuth(req, res, next) {

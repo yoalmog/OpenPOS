@@ -554,8 +554,30 @@ function hasAdminRole(user) {
   ));
 }
 
-// Protect all API endpoints by default, including read-only and order endpoints.
-app.use("/api", requireSupabaseAuth);
+// Public endpoints required by the customer storefront. All other API routes require
+// a server-verified Supabase session. Never expose order management or POS data publicly.
+function isPublicStorefrontRequest(req) {
+  // Express strips the mounted "/api" prefix from req.path inside this middleware.
+  // Use originalUrl so the allowlist matches the complete API pathname.
+  const pathname = (req.originalUrl || req.path).split("?")[0];
+  return (
+    (req.method === "GET" && ["/api/status", "/api/categories", "/api/items"].includes(pathname)) ||
+    (req.method === "POST" && pathname === "/api/online-orders")
+  );
+}
+
+app.use("/api", (req, res, next) => {
+  if (isPublicStorefrontRequest(req)) return next();
+  return requireSupabaseAuth(req, res, (error) => {
+    if (error) return next(error);
+    // Until employee permissions are implemented, authenticated API access is owner/admin only.
+    // This prevents ordinary authenticated accounts from reaching routes that lack local role checks.
+    if (!hasAdminRole(req.authUser)) {
+      return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required." });
+    }
+    return next();
+  });
+});
 
 // Compatibility middleware name retained for existing route declarations.
 // It now checks server-verified Supabase identity, not a shared API key.
@@ -591,11 +613,12 @@ function logAudit(action, details, req) {
 // -------------------------------------------------------------
 // RESTAURANT CORE: Automatic Recipe Depletion & KDS Dispatcher
 // -------------------------------------------------------------
-function processRecipeDepletionAndKDS(order, db) {
+function processRecipeDepletionAndKDS(order, db, options = {}) {
   if (!order || !Array.isArray(order.items)) return;
 
-  // 1. Raw Ingredient Depletion
-  order.items.forEach(orderItem => {
+  // 1. Raw Ingredient Depletion. Public online orders are not paid/accepted yet,
+  // so they must not consume stock until staff confirms the order.
+  if (options.depleteInventory !== false) order.items.forEach(orderItem => {
     const itemId = orderItem.itemId || orderItem.id;
     const orderQty = Number(orderItem.quantity || orderItem.qty || 1);
     const recipe = db.recipes.find(r => r.itemId === itemId || r.itemName === orderItem.name);
@@ -1066,11 +1089,30 @@ app.post('/api/online-orders', async (req, res) => {
   const db = loadFileData();
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
 
-  if (!customerName || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: "customerName and items are required." });
+  if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
+    return res.status(400).json({ error: "customerName and a valid items array are required." });
   }
 
-  const subtotal = items.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 1)), 0);
+  // Prices and item names are authoritative only when read from the server catalog.
+  // The browser may submit itemId, quantity and notes, but never controls the price.
+  const catalogItems = Array.isArray(db.items) ? db.items : [];
+  const orderItems = [];
+  for (const requestedItem of items) {
+    const catalogItem = catalogItems.find(item => item.id === requestedItem.itemId);
+    const quantity = Number(requestedItem.quantity);
+    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return res.status(400).json({ error: "An order item is invalid or unavailable." });
+    }
+    orderItems.push({
+      itemId: catalogItem.id,
+      name: catalogItem.name,
+      quantity,
+      price: Number(catalogItem.price),
+      notes: typeof requestedItem.notes === "string" ? requestedItem.notes.slice(0, 500) : ""
+    });
+  }
+
+  const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   const now = Date.now();
@@ -1089,36 +1131,17 @@ app.post('/api/online-orders', async (req, res) => {
     subtotal,
     tax,
     total,
-    paymentMethod: "ONLINE_CHECKOUT",
-    paymentStatus: "PAID",
+    paymentMethod: "PAY_ON_PICKUP",
+    paymentStatus: "UNPAID",
     status: "RECEIVED",
-    items,
+    items: orderItems,
     createdAt: now
   };
 
   db.onlineOrders.unshift(order);
 
-  // Auto-generate formal Receipt for transaction log
-  const receipt = {
-    id: `REC-${now}`,
-    timestamp: now,
-    subtotal,
-    taxRate: db.storeInfo.taxRate / 100,
-    taxAmount: tax,
-    grandTotal: total,
-    employeeName: "Web Ordering Portal",
-    customerName: order.customerName,
-    ticketNote: `Online [${order.deliveryType}] - ${order.customerPhone}`,
-    isRefund: false,
-    payments: [{ type: "CARD", amount: total }],
-    items: items.map(i => ({
-      name: i.name,
-      quantity: Number(i.quantity || 1),
-      unitPrice: Number(i.price || 0),
-      totalPrice: Number(i.price || 0) * Number(i.quantity || 1)
-    }))
-  };
-  db.receipts.unshift(receipt);
+  // An unpaid web order is not a completed sale: do not create a receipt
+  // or record CARD revenue until a payment provider confirms settlement.
 
   // Automatic ingredient depletion and KDS Station routing!
   processRecipeDepletionAndKDS({
@@ -1128,7 +1151,7 @@ app.post('/api/online-orders', async (req, res) => {
     tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
     customerName: `${order.customerName} (${order.customerPhone})`,
     items: order.items
-  }, db);
+  }, db, { depleteInventory: false });
 
   saveFileData(db);
   logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);

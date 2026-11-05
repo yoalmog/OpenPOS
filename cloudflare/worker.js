@@ -1,6 +1,5 @@
 import "./env-bootstrap.js";
 import app from "../api/index.js";
-import { Client } from "pg";
 import { httpServerHandler } from "cloudflare:node";
 
 app.listen(8787);
@@ -111,26 +110,13 @@ export default {
       if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
         return unauthorized();
       }
-
-      if (!workerEnv.HYPERDRIVE?.connectionString) {
-        return Response.json(
-          { status: "error", database: "binding_not_configured" },
-          { status: 503 }
-        );
-      }
-
-      const client = new Client({
-        connectionString: workerEnv.HYPERDRIVE.connectionString,
-        ssl: false,
-        connectionTimeoutMillis: 5000
-      });
-
       try {
-        await client.connect();
-        await client.query("BEGIN");
-        await client.query("SET LOCAL ROLE openpos_app");
-        const result = await client.query("SELECT 1 AS connected, current_user AS database_role");
-        await client.query("COMMIT");
+        const connectionString = workerEnv.HYPERDRIVE?.connectionString;
+        const pool = connectionString ? app.configureDatabase(connectionString) : null;
+        if (!pool) {
+          return Response.json({ status: "error", database: "binding_not_configured" }, { status: 503 });
+        }
+        const result = await pool.query("SELECT 1 AS connected, current_user AS database_role");
         const connected = result.rows[0]?.connected === 1 &&
           result.rows[0]?.database_role === "openpos_app";
         return Response.json({
@@ -139,21 +125,15 @@ export default {
           databaseRole: result.rows[0]?.database_role || null
         }, { status: connected ? 200 : 503 });
       } catch (error) {
-        console.error("OpenPOS Hyperdrive probe failed", {
-          code: error?.code || "UNKNOWN"
+        console.error("OpenPOS Hyperdrive pool probe failed", {
+          name: error?.name || "Error",
+          code: error?.code || null
         });
-        return Response.json(
-          { status: "error", database: "unavailable", errorCode: error?.code || error?.name || "UNKNOWN" },
-          { status: 503 }
-        );
-      } finally {
-        try {
-          await client.end();
-        } catch (error) {
-          console.error("OpenPOS Hyperdrive client cleanup failed", {
-            code: error?.code || "UNKNOWN"
-          });
-        }
+        return Response.json({
+          status: "error",
+          database: "unavailable",
+          errorCode: error?.code || error?.name || "UNKNOWN"
+        }, { status: 503 });
       }
     }
 

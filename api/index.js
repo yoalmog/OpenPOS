@@ -1130,7 +1130,7 @@ app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
       }
     }
     if (!ing) return res.status(404).json({ error: "Ingredient not found." });
-    logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
+    await logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
     return res.json({ success: true, ingredient: ing });
   } catch (error) {
     console.error("[DB] Ingredient stock update failed:", error.message);
@@ -1429,7 +1429,7 @@ app.post('/api/online-orders', async (req, res) => {
     console.error("[DB] Atomic online order/KDS insert failed:", error.message);
     return res.status(503).json({ error: "The order could not be safely saved. Please retry." });
   }
-  logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
+  try { await logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req); } catch (error) { console.error("[Audit] Online order audit write failed:", error.message); }
   res.json({ success: true, order, kitchenTickets: tickets.length });
 });
 
@@ -1456,48 +1456,68 @@ app.post('/api/online-orders/:id/status', async (req, res) => {
 // 8. Food Waste & Spoilage Reporting API
 // -------------------------------------------------------------
 app.get('/api/waste', async (req, res) => {
-  const db = loadFileData();
-  const logs = db.wasteLogs || [];
-  const totalLoss = logs.reduce((sum, w) => sum + (Number(w.cost) || 0), 0);
-  res.json({
-    totalWasteCost: Math.round(totalLoss * 100) / 100,
-    currency: db.storeInfo.currency,
-    logs
-  });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  try {
+    const logs = pgPool
+      ? await listOperationalRecords(pgPool, "waste_logs")
+      : (loadFileData().wasteLogs || []);
+    const settings = pgPool ? await getStoreSettings(pgPool) : loadFileData().storeInfo;
+    const totalLoss = logs.reduce((sum, entry) => sum + (Number(entry.cost) || 0), 0);
+    return res.json({ totalWasteCost: Math.round(totalLoss * 100) / 100, currency: settings?.currency || null, logs });
+  } catch (error) {
+    console.error("[DB] Waste-log read failed:", error.message);
+    return res.status(503).json({ error: "Waste logs are temporarily unavailable." });
+  }
 });
 
 app.post('/api/waste', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body;
-
-  if (!name || quantity === undefined) {
-    return res.status(400).json({ error: "name and quantity are required." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body || {};
+  const parsedQuantity = Number(quantity);
+  const parsedCost = Number(cost || 0);
+  if (!name || quantity === undefined || !Number.isFinite(parsedQuantity) || parsedQuantity <= 0 ||
+      !Number.isFinite(parsedCost) || parsedCost < 0) {
+    return res.status(400).json({ error: "A valid name, positive quantity and non-negative cost are required." });
   }
-
   const wasteEntry = {
-    id: Date.now(),
+    id: `waste_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     itemOrIngredientId: itemOrIngredientId || "generic",
-    name: name.trim(),
-    quantity: Number(quantity),
-    unit: unit || "units",
-    cost: Number(cost || 0),
-    reason: reason || "EXPIRED", // EXPIRED, OVERPREP, MISTAKE, STORAGE_FAIL, RETURN
-    loggedBy: loggedBy || "Manager",
+    name: String(name).trim(), quantity: parsedQuantity, unit: unit || "units",
+    cost: parsedCost, reason: reason || "EXPIRED", loggedBy: loggedBy || "Manager",
     timestamp: Date.now()
   };
-
-  db.wasteLogs = db.wasteLogs || [];
-  db.wasteLogs.unshift(wasteEntry);
-
-  // Auto-deduct from stock if matching ingredient or item found
-  const ing = (db.ingredients || []).find(i => i.id === itemOrIngredientId || i.name === name);
-  if (ing) {
-    ing.currentStock = Math.max(0, ing.currentStock - wasteEntry.quantity);
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query("BEGIN");
+      await upsertOperationalRecord(client, "waste_logs", wasteEntry);
+      const ingredientResult = await client.query(
+        "SELECT id FROM ingredients WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1",
+        [itemOrIngredientId || null, String(name).trim()]
+      );
+      if (ingredientResult.rowCount) {
+        await updateIngredientStock(client, ingredientResult.rows[0].id, { change: -parsedQuantity });
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("[DB] Waste-log transaction failed:", error.message);
+      return res.status(503).json({ error: "Waste log and inventory adjustment could not be saved." });
+    } finally { client.release(); }
+  } else {
+    const db = loadFileData();
+    db.wasteLogs = db.wasteLogs || [];
+    db.wasteLogs.unshift(wasteEntry);
+    const ingredient = (db.ingredients || []).find(item => item.id === itemOrIngredientId || item.name === name);
+    if (ingredient) ingredient.currentStock = Math.max(0, ingredient.currentStock - parsedQuantity);
+    saveFileData(db);
   }
-
-  saveFileData(db);
-  logAudit("FOOD_WASTE_LOGGED", wasteEntry, req);
-  res.json({ success: true, wasteEntry });
+  try { await logAudit("FOOD_WASTE_LOGGED", wasteEntry, req); } catch (error) {
+    console.error("[Audit] Waste log audit write failed:", error.message);
+  }
+  return res.json({ success: true, wasteEntry });
 });
 
 // -------------------------------------------------------------
@@ -1560,57 +1580,91 @@ app.get('/api/forecast', async (req, res) => {
 // 10. Food Safety & Daily Checklists API
 // -------------------------------------------------------------
 app.get('/api/safety/temperature', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.temperatureLogs || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  try {
+    return res.json(pgPool
+      ? await listOperationalRecords(pgPool, "temperature_logs")
+      : (loadFileData().temperatureLogs || []));
+  } catch (error) {
+    console.error("[DB] Temperature-log read failed:", error.message);
+    return res.status(503).json({ error: "Temperature logs are temporarily unavailable." });
+  }
 });
 
 app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { unitName, targetTempC, actualTempC, checkedBy } = req.body;
-  if (!unitName || actualTempC === undefined) {
-    return res.status(400).json({ error: "unitName and actualTempC are required." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  const { unitName, targetTempC, actualTempC, checkedBy } = req.body || {};
+  if (!unitName || actualTempC === undefined || !Number.isFinite(Number(actualTempC))) {
+    return res.status(400).json({ error: "unitName and a valid actualTempC are required." });
   }
-
   const actual = Number(actualTempC);
-  const target = Number(targetTempC || 4.0);
-  let status = "NORMAL";
-  if (actual > target + 2) status = "CRITICAL";
-  else if (actual > target) status = "WARNING";
-
+  const target = targetTempC === undefined ? 4 : Number(targetTempC);
+  if (!Number.isFinite(target)) return res.status(400).json({ error: "targetTempC must be a number." });
   const log = {
-    id: Date.now(),
-    unitName: unitName.trim(),
-    targetTempC: target,
-    actualTempC: actual,
-    status,
-    checkedBy: checkedBy || "Staff Member",
-    timestamp: Date.now()
+    id: `temperature_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    unitName: String(unitName).trim(), targetTempC: target, actualTempC: actual,
+    status: actual > target + 2 ? "CRITICAL" : (actual > target ? "WARNING" : "NORMAL"),
+    checkedBy: checkedBy || "Staff Member", timestamp: Date.now()
   };
-
-  db.temperatureLogs = db.temperatureLogs || [];
-  db.temperatureLogs.unshift(log);
-  saveFileData(db);
-  res.json({ success: true, log });
+  try {
+    if (pgPool) await upsertOperationalRecord(pgPool, "temperature_logs", log);
+    else {
+      const db = loadFileData();
+      db.temperatureLogs = db.temperatureLogs || [];
+      db.temperatureLogs.unshift(log);
+      saveFileData(db);
+    }
+    return res.json({ success: true, log });
+  } catch (error) {
+    console.error("[DB] Temperature-log save failed:", error.message);
+    return res.status(503).json({ error: "Temperature log could not be saved." });
+  }
 });
 
 app.get('/api/safety/checklists', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.checklists || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  try {
+    return res.json(pgPool
+      ? await listOperationalRecords(pgPool, "checklists")
+      : (loadFileData().checklists || []));
+  } catch (error) {
+    console.error("[DB] Checklist read failed:", error.message);
+    return res.status(503).json({ error: "Checklists are temporarily unavailable." });
+  }
 });
 
 app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const { itemId, done } = req.body;
-  const list = (db.checklists || []).find(c => c.id === req.params.id);
-  if (!list) return res.status(404).json({ error: "Checklist not found." });
-
-  const item = list.items.find(i => i.id === itemId);
-  if (item) {
-    item.done = !!done;
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  const { itemId, done } = req.body || {};
+  try {
+    if (pgPool) {
+      const lists = await listOperationalRecords(pgPool, "checklists", 1000);
+      const list = lists.find(entry => String(entry.id) === String(req.params.id));
+      if (!list) return res.status(404).json({ error: "Checklist not found." });
+      const item = (list.items || []).find(entry => String(entry.id) === String(itemId));
+      if (!item) return res.status(404).json({ error: "Checklist item not found." });
+      item.done = Boolean(done);
+      item.time = done ? new Date().toISOString() : null;
+      await upsertOperationalRecord(pgPool, "checklists", list);
+      return res.json({ success: true, checklist: list });
+    }
+    const db = loadFileData();
+    const list = (db.checklists || []).find(entry => entry.id === req.params.id);
+    if (!list) return res.status(404).json({ error: "Checklist not found." });
+    const item = (list.items || []).find(entry => entry.id === itemId);
+    if (!item) return res.status(404).json({ error: "Checklist item not found." });
+    item.done = Boolean(done);
     item.time = done ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    saveFileData(db);
+    return res.json({ success: true, checklist: list });
+  } catch (error) {
+    console.error("[DB] Checklist update failed:", error.message);
+    return res.status(503).json({ error: "Checklist update could not be saved." });
   }
-  saveFileData(db);
-  res.json({ success: true, checklist: list });
 });
 
 // -------------------------------------------------------------
@@ -1808,7 +1862,7 @@ app.post('/api/reset', requireManagerPin, async (req, res) => {
 
   const db = JSON.parse(JSON.stringify(DEFAULT_DATA));
   saveFileData(db);
-  logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req);
+  try { await logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req); } catch (error) { console.error("[Audit] Reset audit write failed:", error.message); }
 
   res.json({ success: true, message: "All cloud store data reset to clean restaurant default template." });
 });

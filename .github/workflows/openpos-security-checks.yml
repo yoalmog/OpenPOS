@@ -4,7 +4,11 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [security/supabase-auth-hardening]
+    branches: [main, security/supabase-auth-hardening]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   backoffice-api:
@@ -24,7 +28,6 @@ jobs:
           node --check OpenPOS-Backoffice/api/index.js
           node --check api/index.js
           node --check OpenPOS-Backoffice/public/app.js
-
 
   repository-tests:
     runs-on: ubuntu-latest
@@ -48,6 +51,32 @@ jobs:
       - name: Assemble Android debug APK
         working-directory: OpenPOS
         run: bash ./gradlew :app:assembleDebug
+      - name: Verify APK and calculate checksum
+        working-directory: OpenPOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          sha256sum "$APK" | tee apk-sha256.txt
+          {
+            echo "### Android APK"
+            echo ' `app-debug.apk` built successfully.'
+            echo ''
+            echo 'SHA-256:'
+            echo '```'
+            cat apk-sha256.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpos-debug-apk-${{ github.sha }}
+          path: |
+            OpenPOS/app/build/outputs/apk/debug/app-debug.apk
+            OpenPOS/apk-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
 
   production-http-smoke:
     runs-on: ubuntu-latest

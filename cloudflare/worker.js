@@ -2,7 +2,6 @@ import { Client } from "pg";
 import { httpServerHandler } from "cloudflare:node";
 import { env } from "cloudflare:workers";
 import process from "node:process";
-import { createRequire } from "node:module";
 
 function unauthorized() {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,8 +17,7 @@ process.env.SUPABASE_URL = env.SUPABASE_URL || "";
 process.env.SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY || "";
 process.env.OPENPOS_OWNER_USER_ID = env.OPENPOS_OWNER_USER_ID || "";
 
-const require = createRequire(import.meta.url);
-const app = require("../api/index.js");
+const { default: app } = await import("../api/index.js");
 app.listen(8787);
 const expressHandler = httpServerHandler({ port: 8787 });
 

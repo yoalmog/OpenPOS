@@ -45,6 +45,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Apply Cloudflare Node.js compatibility patch
+        run: node scripts/patch-workers-deps.cjs
+
       - name: Sync protected health token to staging Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

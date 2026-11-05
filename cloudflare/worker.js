@@ -1,5 +1,9 @@
 import { Client } from "pg";
 
+function unauthorized() {
+  return Response.json({ error: "Unauthorized" }, { status: 401 });
+}
+
 // This isolated probe validates the Hyperdrive binding before the legacy API
 // is adapted. It deliberately exposes no business data and is not a POS API.
 export default {
@@ -19,6 +23,13 @@ export default {
     }
 
     if (url.pathname === "/health/db") {
+      // Database probes open a real connection and must not be publicly callable.
+      const expectedToken = env.OPENPOS_HEALTH_TOKEN;
+      const authorization = request.headers.get("authorization") || "";
+      if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
+        return unauthorized();
+      }
+
       if (!env.HYPERDRIVE?.connectionString) {
         return Response.json(
           { status: "error", database: "binding_not_configured" },

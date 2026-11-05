@@ -1024,17 +1024,924 @@ app.get('/api/recipes/profitability', async (req, res) => {
 // 6. Kitchen Display System (KDS) & Routing Stations API
 // -------------------------------------------------------------
 app.get('/api/kitchen/tickets', async (req, res) => {
-  const db = loadFileData();
-  let tickets = db.kitchenOrders || [];
   const { station, status } = req.query;
+  if (pgPool) {
+    try {
+      const values = []; const filters = [];
+      if (station && station !== 'ALL') { values.push(station); filters.push('station = 
 
-  if (station && station !== 'ALL') {
-    tickets = tickets.filter(t => t.station === station);
+app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
+  if (!items || !station) return res.status(400).json({ error: "station and items are required." });
+
+  const now = Date.now();
+  const ticket = {
+    id: `ticket_${now}_${Math.random().toString(36).substr(2, 4)}`,
+    orderNumber: String(orderNumber || Math.floor(100 + Math.random() * 900)),
+    channel: channel || "POS",
+    tableNumber: tableNumber || null,
+    customerName: customerName || "Walk-in Guest",
+    station,
+    items,
+    status: "PENDING",
+    createdAt: now,
+    targetReadyAt: now + (5 * 60 * 1000),
+    completedAt: null
+  };
+
+  db.kitchenOrders.unshift(ticket);
+  saveFileData(db);
+  res.json({ success: true, ticket });
+});
+
+app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
+  const db = loadFileData();
+  const { status } = req.body;
+  const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Ticket not found." });
+
+  ticket.status = status; // PENDING, PREPARING, READY, SERVED
+  if (status === 'READY' || status === 'SERVED') {
+    ticket.completedAt = Date.now();
   }
-  if (status) {
-    tickets = tickets.filter(t => t.status === status);
+  saveFileData(db);
+  res.json({ success: true, ticket });
+});
+
+// -------------------------------------------------------------
+// 7. Omnichannel Online Ordering API (Web Storefront / Deliveries)
+// -------------------------------------------------------------
+app.get('/api/online-orders', async (req, res) => {
+  if (pgPool) {
+    try {
+      const result = await pgPool.query('SELECT id, order_number AS "orderNumber", channel, delivery_type AS "deliveryType", customer_name AS "customerName", customer_phone AS "customerPhone", pickup_time AS "pickupTime", subtotal, tax, total, payment_method AS "paymentMethod", payment_status AS "paymentStatus", status, items, created_at AS "createdAt" FROM online_orders ORDER BY created_at DESC LIMIT 200');
+      return res.json(result.rows);
+    } catch (error) { console.error('[Orders] PostgreSQL read failed:', error.message); return res.status(503).json({ error: 'Order data is temporarily unavailable.' }); }
+  }
+  if (isVercel) return res.status(503).json({ error: 'Persistent order storage is not configured.' });
+  res.json(loadFileData().onlineOrders || []);
+});
+
+app.post('/api/online-orders', async (req, res) => {
+  const db = loadFileData();
+  const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
+
+  if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
+    return res.status(400).json({ error: "customerName and a valid items array are required." });
   }
 
+  // Prices and item names are authoritative only when read from the server catalog.
+  // The browser may submit itemId, quantity and notes, but never controls the price.
+  const catalogItems = Array.isArray(db.items) ? db.items : [];
+  const orderItems = [];
+  for (const requestedItem of items) {
+    const catalogItem = catalogItems.find(item => item.id === requestedItem.itemId);
+    const quantity = Number(requestedItem.quantity);
+    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return res.status(400).json({ error: "An order item is invalid or unavailable." });
+    }
+    orderItems.push({
+      itemId: catalogItem.id,
+      name: catalogItem.name,
+      quantity,
+      price: Number(catalogItem.price),
+      notes: typeof requestedItem.notes === "string" ? requestedItem.notes.slice(0, 500) : ""
+    });
+  }
+
+  const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
+  const total = Math.round((subtotal + tax) * 100) / 100;
+  const now = Date.now();
+  const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
+
+  const order = {
+    id: `ord_${now}_${Math.random().toString(36).substr(2, 4)}`,
+    orderNumber,
+    channel: "WEB_STOREFRONT",
+    deliveryType: deliveryType || "TAKEAWAY",
+    tableNumber: tableNumber || null,
+    customerName: customerName.trim(),
+    customerPhone: customerPhone || "",
+    pickupTime: pickupTime || "Immediate (15-20 min)",
+    notes: notes || "",
+    subtotal,
+    tax,
+    total,
+    paymentMethod: "PAY_ON_PICKUP",
+    paymentStatus: "UNPAID",
+    status: "RECEIVED",
+    items: orderItems,
+    createdAt: now
+  };
+
+  db.onlineOrders.unshift(order);
+
+  // An unpaid web order is not a completed sale: do not create a receipt
+  // or record CARD revenue until a payment provider confirms settlement.
+
+  // Automatic ingredient depletion and KDS Station routing!
+  processRecipeDepletionAndKDS({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    channel: "WEB",
+    tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
+    customerName: `${order.customerName} (${order.customerPhone})`,
+    items: order.items
+  }, db, { depleteInventory: false });
+
+  saveFileData(db);
+  logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
+  res.json({ success: true, order });
+});
+
+app.post('/api/online-orders/:id/status', async (req, res) => {
+  const db = loadFileData();
+  const { status } = req.body;
+  const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: "Order not found." });
+
+  order.status = status; // RECEIVED, PREPARING, READY, COMPLETED, CANCELLED
+  saveFileData(db);
+  res.json({ success: true, order });
+});
+
+// -------------------------------------------------------------
+// 8. Food Waste & Spoilage Reporting API
+// -------------------------------------------------------------
+app.get('/api/waste', async (req, res) => {
+  const db = loadFileData();
+  const logs = db.wasteLogs || [];
+  const totalLoss = logs.reduce((sum, w) => sum + (Number(w.cost) || 0), 0);
+  res.json({
+    totalWasteCost: Math.round(totalLoss * 100) / 100,
+    currency: db.storeInfo.currency,
+    logs
+  });
+});
+
+app.post('/api/waste', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body;
+
+  if (!name || quantity === undefined) {
+    return res.status(400).json({ error: "name and quantity are required." });
+  }
+
+  const wasteEntry = {
+    id: Date.now(),
+    itemOrIngredientId: itemOrIngredientId || "generic",
+    name: name.trim(),
+    quantity: Number(quantity),
+    unit: unit || "units",
+    cost: Number(cost || 0),
+    reason: reason || "EXPIRED", // EXPIRED, OVERPREP, MISTAKE, STORAGE_FAIL, RETURN
+    loggedBy: loggedBy || "Manager",
+    timestamp: Date.now()
+  };
+
+  db.wasteLogs = db.wasteLogs || [];
+  db.wasteLogs.unshift(wasteEntry);
+
+  // Auto-deduct from stock if matching ingredient or item found
+  const ing = (db.ingredients || []).find(i => i.id === itemOrIngredientId || i.name === name);
+  if (ing) {
+    ing.currentStock = Math.max(0, ing.currentStock - wasteEntry.quantity);
+  }
+
+  saveFileData(db);
+  logAudit("FOOD_WASTE_LOGGED", wasteEntry, req);
+  res.json({ success: true, wasteEntry });
+});
+
+// -------------------------------------------------------------
+// 9. Smart Staffing & Shift Demand Forecast API
+// -------------------------------------------------------------
+app.get('/api/forecast', async (req, res) => {
+  const db = loadFileData();
+  const receipts = db.receipts || [];
+  const now = new Date();
+
+  // Hourly order density estimation
+  const hourlyCount = {};
+  for (let h = 7; h <= 22; h++) {
+    hourlyCount[`${String(h).padStart(2, '0')}:00`] = 0;
+  }
+
+  receipts.forEach(r => {
+    const d = new Date(r.timestamp);
+    const hStr = `${String(d.getHours()).padStart(2, '0')}:00`;
+    if (hourlyCount[hStr] !== undefined) hourlyCount[hStr]++;
+  });
+
+  const hourlyForecast = Object.entries(hourlyCount).map(([hour, count]) => {
+    const predictedOrders = Math.max(count * 2, Math.floor(8 + Math.random() * 12));
+    let baristas = 1;
+    let kitchenCooks = 1;
+    let floorStaff = 1;
+
+    if (predictedOrders > 25) {
+      baristas = 3;
+      kitchenCooks = 2;
+      floorStaff = 3;
+    } else if (predictedOrders > 15) {
+      baristas = 2;
+      kitchenCooks = 2;
+      floorStaff = 2;
+    }
+
+    return {
+      hour,
+      predictedOrders,
+      recommendedStaff: {
+        total: baristas + kitchenCooks + floorStaff,
+        baristas,
+        kitchenCooks,
+        floorStaff
+      }
+    };
+  });
+
+  res.json({
+    day: now.toLocaleDateString(undefined, { weekday: 'long' }),
+    totalPredictedOrders: hourlyForecast.reduce((s, h) => s + h.predictedOrders, 0),
+    peakHour: "12:00",
+    hourlyForecast
+  });
+});
+
+// -------------------------------------------------------------
+// 10. Food Safety & Daily Checklists API
+// -------------------------------------------------------------
+app.get('/api/safety/temperature', async (req, res) => {
+  const db = loadFileData();
+  res.json(db.temperatureLogs || []);
+});
+
+app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { unitName, targetTempC, actualTempC, checkedBy } = req.body;
+  if (!unitName || actualTempC === undefined) {
+    return res.status(400).json({ error: "unitName and actualTempC are required." });
+  }
+
+  const actual = Number(actualTempC);
+  const target = Number(targetTempC || 4.0);
+  let status = "NORMAL";
+  if (actual > target + 2) status = "CRITICAL";
+  else if (actual > target) status = "WARNING";
+
+  const log = {
+    id: Date.now(),
+    unitName: unitName.trim(),
+    targetTempC: target,
+    actualTempC: actual,
+    status,
+    checkedBy: checkedBy || "Staff Member",
+    timestamp: Date.now()
+  };
+
+  db.temperatureLogs = db.temperatureLogs || [];
+  db.temperatureLogs.unshift(log);
+  saveFileData(db);
+  res.json({ success: true, log });
+});
+
+app.get('/api/safety/checklists', async (req, res) => {
+  const db = loadFileData();
+  res.json(db.checklists || []);
+});
+
+app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { itemId, done } = req.body;
+  const list = (db.checklists || []).find(c => c.id === req.params.id);
+  if (!list) return res.status(404).json({ error: "Checklist not found." });
+
+  const item = list.items.find(i => i.id === itemId);
+  if (item) {
+    item.done = !!done;
+    item.time = done ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+  }
+  saveFileData(db);
+  res.json({ success: true, checklist: list });
+});
+
+// -------------------------------------------------------------
+// 11. POS Synchronization & Delta Engine
+// -------------------------------------------------------------
+app.post('/api/sync', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const db = loadFileData();
+  const body = req.body || {};
+  const events = Array.isArray(body.events) ? body.events : [];
+  const acknowledgedIds = [];
+
+  console.log(`[CloudSync] Incoming sync packet from ${body.client || 'POS'} with ${events.length} delta events`);
+
+  for (const ev of events) {
+    const eventId = ev.id;
+    const type = ev.type;
+    let payload = ev.payload;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (_) {
+        payload = {};
+      }
+    }
+
+    if (!payload || typeof payload !== 'object') continue;
+
+    if (type === 'RECEIPT_CREATED' || type === 'RECEIPT_REFUNDED') {
+      const gTot = Number(payload.grandTotal !== undefined ? payload.grandTotal : (payload.total !== undefined ? payload.total : 0));
+      const subTot = Number(payload.subtotal !== undefined ? payload.subtotal : gTot);
+      const receipt = {
+        id: payload.id || `REC-${Date.now()}`,
+        timestamp: Number(payload.timestamp) || Date.now(),
+        subtotal: subTot,
+        taxRate: Number(payload.taxRate) || 0.17,
+        taxAmount: Number(payload.taxAmount) || (gTot - subTot),
+        grandTotal: gTot,
+        employeeName: payload.employeeName || "Cashier",
+        customerName: payload.customerName || null,
+        ticketNote: payload.ticketNote || null,
+        isRefund: !!payload.isRefund || type === 'RECEIPT_REFUNDED',
+        originalReceiptId: payload.originalReceiptId || null,
+        payments: Array.isArray(payload.payments) ? payload.payments : [],
+        items: Array.isArray(payload.items) ? payload.items : []
+      };
+
+      // 1. PostgreSQL Persistent Atomic Upsert
+      if (pgPool) {
+        try {
+          await pgPool.query(`
+            INSERT INTO receipts (
+              id, timestamp, subtotal, tax_rate, tax_amount, grand_total,
+              employee_name, customer_name, ticket_note, is_refund, original_receipt_id,
+              payments, items
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (id) DO UPDATE SET
+              subtotal = EXCLUDED.subtotal,
+              grand_total = EXCLUDED.grand_total,
+              is_refund = EXCLUDED.is_refund
+          `, [
+            receipt.id, receipt.timestamp, receipt.subtotal, receipt.taxRate, receipt.taxAmount, receipt.grandTotal,
+            receipt.employeeName, receipt.customerName, receipt.ticketNote, receipt.isRefund, receipt.originalReceiptId,
+            JSON.stringify(receipt.payments), JSON.stringify(receipt.items)
+          ]);
+        } catch (err) {
+          console.error("[CloudSync] Postgres receipt insert error:", err.message);
+        }
+      }
+
+      // 2. In-Memory Store Update & Deduplication
+      const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
+      if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
+      else db.receipts.unshift(receipt);
+
+      // 3. Process Automatic Ingredient Depletion & KDS Station Routing!
+      if (!receipt.isRefund) {
+        processRecipeDepletionAndKDS(receipt, db);
+      }
+
+      acknowledgedIds.push(eventId);
+    } else {
+      acknowledgedIds.push(eventId);
+    }
+  }
+
+  saveFileData(db);
+
+  res.json({
+    success: true,
+    message: "Delta sync completed successfully",
+    syncedAt: Date.now(),
+    acknowledgedIds,
+    items: db.items,
+    categories: db.categories
+  });
+});
+
+// -------------------------------------------------------------
+// 12. Receipts Log & CSV Exports
+// -------------------------------------------------------------
+app.get('/api/receipts', async (req, res) => {
+  const db = loadFileData();
+  const sorted = [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  res.json(sorted);
+});
+
+app.get('/api/export/receipts', async (req, res) => {
+  const db = loadFileData();
+  const receipts = db.receipts || [];
+  let csv = "Receipt ID,Timestamp,Date,Employee,Customer,Subtotal,Tax,Grand Total,Payment Methods,Items Summary,Is Refund\n";
+
+  receipts.forEach(r => {
+    const d = new Date(r.timestamp).toISOString();
+    const paymentsStr = Array.isArray(r.payments) ? r.payments.map(p => `${p.type}: ${p.amount}`).join(" | ") : "";
+    const itemsStr = Array.isArray(r.items) ? r.items.map(i => `${i.name} (x${i.quantity})`).join(" ; ") : "";
+    csv += `"${r.id}",${r.timestamp},"${d}","${r.employeeName || ''}","${r.customerName || ''}",${r.subtotal},${r.taxAmount},${r.grandTotal},"${paymentsStr}","${itemsStr}",${r.isRefund ? 'YES' : 'NO'}\n`;
+  });
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="openpos_receipts_export.csv"');
+  res.send(csv);
+});
+
+app.get('/api/export/items', async (req, res) => {
+  const db = loadFileData();
+  const items = db.items || [];
+  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\n";
+
+  items.forEach(i => {
+    csv += `"${i.id}","${i.name}",${i.price},"${i.categoryId || ''}","${i.barcode || ''}",${i.stockQuantity || 0},"${i.station || 'HOT_KITCHEN'}",${i.prepTimeMinutes || 5}\n`;
+  });
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="openpos_catalog_export.csv"');
+  res.send(csv);
+});
+
+// -------------------------------------------------------------
+// 13. Danger Zone Reset
+// -------------------------------------------------------------
+app.post('/api/reset', requireManagerPin, async (req, res) => {
+  await initPgTables();
+  if (pgPool) {
+    try {
+      await pgPool.query('TRUNCATE TABLE receipts, items, categories, shifts, audit_logs');
+    } catch (_) {}
+  }
+
+  const db = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  saveFileData(db);
+  logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req);
+
+  res.json({ success: true, message: "All cloud store data reset to clean restaurant default template." });
+});
+
+module.exports = app;
+ + values.length); }
+      if (status) { values.push(status); filters.push('status = 
+
+app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
+  if (!items || !station) return res.status(400).json({ error: "station and items are required." });
+
+  const now = Date.now();
+  const ticket = {
+    id: `ticket_${now}_${Math.random().toString(36).substr(2, 4)}`,
+    orderNumber: String(orderNumber || Math.floor(100 + Math.random() * 900)),
+    channel: channel || "POS",
+    tableNumber: tableNumber || null,
+    customerName: customerName || "Walk-in Guest",
+    station,
+    items,
+    status: "PENDING",
+    createdAt: now,
+    targetReadyAt: now + (5 * 60 * 1000),
+    completedAt: null
+  };
+
+  db.kitchenOrders.unshift(ticket);
+  saveFileData(db);
+  res.json({ success: true, ticket });
+});
+
+app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
+  const db = loadFileData();
+  const { status } = req.body;
+  const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: "Ticket not found." });
+
+  ticket.status = status; // PENDING, PREPARING, READY, SERVED
+  if (status === 'READY' || status === 'SERVED') {
+    ticket.completedAt = Date.now();
+  }
+  saveFileData(db);
+  res.json({ success: true, ticket });
+});
+
+// -------------------------------------------------------------
+// 7. Omnichannel Online Ordering API (Web Storefront / Deliveries)
+// -------------------------------------------------------------
+app.get('/api/online-orders', async (req, res) => {
+  const db = loadFileData();
+  res.json(db.onlineOrders || []);
+});
+
+app.post('/api/online-orders', async (req, res) => {
+  const db = loadFileData();
+  const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
+
+  if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
+    return res.status(400).json({ error: "customerName and a valid items array are required." });
+  }
+
+  // Prices and item names are authoritative only when read from the server catalog.
+  // The browser may submit itemId, quantity and notes, but never controls the price.
+  const catalogItems = Array.isArray(db.items) ? db.items : [];
+  const orderItems = [];
+  for (const requestedItem of items) {
+    const catalogItem = catalogItems.find(item => item.id === requestedItem.itemId);
+    const quantity = Number(requestedItem.quantity);
+    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return res.status(400).json({ error: "An order item is invalid or unavailable." });
+    }
+    orderItems.push({
+      itemId: catalogItem.id,
+      name: catalogItem.name,
+      quantity,
+      price: Number(catalogItem.price),
+      notes: typeof requestedItem.notes === "string" ? requestedItem.notes.slice(0, 500) : ""
+    });
+  }
+
+  const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
+  const total = Math.round((subtotal + tax) * 100) / 100;
+  const now = Date.now();
+  const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
+
+  const order = {
+    id: `ord_${now}_${Math.random().toString(36).substr(2, 4)}`,
+    orderNumber,
+    channel: "WEB_STOREFRONT",
+    deliveryType: deliveryType || "TAKEAWAY",
+    tableNumber: tableNumber || null,
+    customerName: customerName.trim(),
+    customerPhone: customerPhone || "",
+    pickupTime: pickupTime || "Immediate (15-20 min)",
+    notes: notes || "",
+    subtotal,
+    tax,
+    total,
+    paymentMethod: "PAY_ON_PICKUP",
+    paymentStatus: "UNPAID",
+    status: "RECEIVED",
+    items: orderItems,
+    createdAt: now
+  };
+
+  db.onlineOrders.unshift(order);
+
+  // An unpaid web order is not a completed sale: do not create a receipt
+  // or record CARD revenue until a payment provider confirms settlement.
+
+  // Automatic ingredient depletion and KDS Station routing!
+  processRecipeDepletionAndKDS({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    channel: "WEB",
+    tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
+    customerName: `${order.customerName} (${order.customerPhone})`,
+    items: order.items
+  }, db, { depleteInventory: false });
+
+  saveFileData(db);
+  logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
+  res.json({ success: true, order });
+});
+
+app.post('/api/online-orders/:id/status', async (req, res) => {
+  const db = loadFileData();
+  const { status } = req.body;
+  const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: "Order not found." });
+
+  order.status = status; // RECEIVED, PREPARING, READY, COMPLETED, CANCELLED
+  saveFileData(db);
+  res.json({ success: true, order });
+});
+
+// -------------------------------------------------------------
+// 8. Food Waste & Spoilage Reporting API
+// -------------------------------------------------------------
+app.get('/api/waste', async (req, res) => {
+  const db = loadFileData();
+  const logs = db.wasteLogs || [];
+  const totalLoss = logs.reduce((sum, w) => sum + (Number(w.cost) || 0), 0);
+  res.json({
+    totalWasteCost: Math.round(totalLoss * 100) / 100,
+    currency: db.storeInfo.currency,
+    logs
+  });
+});
+
+app.post('/api/waste', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body;
+
+  if (!name || quantity === undefined) {
+    return res.status(400).json({ error: "name and quantity are required." });
+  }
+
+  const wasteEntry = {
+    id: Date.now(),
+    itemOrIngredientId: itemOrIngredientId || "generic",
+    name: name.trim(),
+    quantity: Number(quantity),
+    unit: unit || "units",
+    cost: Number(cost || 0),
+    reason: reason || "EXPIRED", // EXPIRED, OVERPREP, MISTAKE, STORAGE_FAIL, RETURN
+    loggedBy: loggedBy || "Manager",
+    timestamp: Date.now()
+  };
+
+  db.wasteLogs = db.wasteLogs || [];
+  db.wasteLogs.unshift(wasteEntry);
+
+  // Auto-deduct from stock if matching ingredient or item found
+  const ing = (db.ingredients || []).find(i => i.id === itemOrIngredientId || i.name === name);
+  if (ing) {
+    ing.currentStock = Math.max(0, ing.currentStock - wasteEntry.quantity);
+  }
+
+  saveFileData(db);
+  logAudit("FOOD_WASTE_LOGGED", wasteEntry, req);
+  res.json({ success: true, wasteEntry });
+});
+
+// -------------------------------------------------------------
+// 9. Smart Staffing & Shift Demand Forecast API
+// -------------------------------------------------------------
+app.get('/api/forecast', async (req, res) => {
+  const db = loadFileData();
+  const receipts = db.receipts || [];
+  const now = new Date();
+
+  // Hourly order density estimation
+  const hourlyCount = {};
+  for (let h = 7; h <= 22; h++) {
+    hourlyCount[`${String(h).padStart(2, '0')}:00`] = 0;
+  }
+
+  receipts.forEach(r => {
+    const d = new Date(r.timestamp);
+    const hStr = `${String(d.getHours()).padStart(2, '0')}:00`;
+    if (hourlyCount[hStr] !== undefined) hourlyCount[hStr]++;
+  });
+
+  const hourlyForecast = Object.entries(hourlyCount).map(([hour, count]) => {
+    const predictedOrders = Math.max(count * 2, Math.floor(8 + Math.random() * 12));
+    let baristas = 1;
+    let kitchenCooks = 1;
+    let floorStaff = 1;
+
+    if (predictedOrders > 25) {
+      baristas = 3;
+      kitchenCooks = 2;
+      floorStaff = 3;
+    } else if (predictedOrders > 15) {
+      baristas = 2;
+      kitchenCooks = 2;
+      floorStaff = 2;
+    }
+
+    return {
+      hour,
+      predictedOrders,
+      recommendedStaff: {
+        total: baristas + kitchenCooks + floorStaff,
+        baristas,
+        kitchenCooks,
+        floorStaff
+      }
+    };
+  });
+
+  res.json({
+    day: now.toLocaleDateString(undefined, { weekday: 'long' }),
+    totalPredictedOrders: hourlyForecast.reduce((s, h) => s + h.predictedOrders, 0),
+    peakHour: "12:00",
+    hourlyForecast
+  });
+});
+
+// -------------------------------------------------------------
+// 10. Food Safety & Daily Checklists API
+// -------------------------------------------------------------
+app.get('/api/safety/temperature', async (req, res) => {
+  const db = loadFileData();
+  res.json(db.temperatureLogs || []);
+});
+
+app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { unitName, targetTempC, actualTempC, checkedBy } = req.body;
+  if (!unitName || actualTempC === undefined) {
+    return res.status(400).json({ error: "unitName and actualTempC are required." });
+  }
+
+  const actual = Number(actualTempC);
+  const target = Number(targetTempC || 4.0);
+  let status = "NORMAL";
+  if (actual > target + 2) status = "CRITICAL";
+  else if (actual > target) status = "WARNING";
+
+  const log = {
+    id: Date.now(),
+    unitName: unitName.trim(),
+    targetTempC: target,
+    actualTempC: actual,
+    status,
+    checkedBy: checkedBy || "Staff Member",
+    timestamp: Date.now()
+  };
+
+  db.temperatureLogs = db.temperatureLogs || [];
+  db.temperatureLogs.unshift(log);
+  saveFileData(db);
+  res.json({ success: true, log });
+});
+
+app.get('/api/safety/checklists', async (req, res) => {
+  const db = loadFileData();
+  res.json(db.checklists || []);
+});
+
+app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) => {
+  const db = loadFileData();
+  const { itemId, done } = req.body;
+  const list = (db.checklists || []).find(c => c.id === req.params.id);
+  if (!list) return res.status(404).json({ error: "Checklist not found." });
+
+  const item = list.items.find(i => i.id === itemId);
+  if (item) {
+    item.done = !!done;
+    item.time = done ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+  }
+  saveFileData(db);
+  res.json({ success: true, checklist: list });
+});
+
+// -------------------------------------------------------------
+// 11. POS Synchronization & Delta Engine
+// -------------------------------------------------------------
+app.post('/api/sync', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const db = loadFileData();
+  const body = req.body || {};
+  const events = Array.isArray(body.events) ? body.events : [];
+  const acknowledgedIds = [];
+
+  console.log(`[CloudSync] Incoming sync packet from ${body.client || 'POS'} with ${events.length} delta events`);
+
+  for (const ev of events) {
+    const eventId = ev.id;
+    const type = ev.type;
+    let payload = ev.payload;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (_) {
+        payload = {};
+      }
+    }
+
+    if (!payload || typeof payload !== 'object') continue;
+
+    if (type === 'RECEIPT_CREATED' || type === 'RECEIPT_REFUNDED') {
+      const gTot = Number(payload.grandTotal !== undefined ? payload.grandTotal : (payload.total !== undefined ? payload.total : 0));
+      const subTot = Number(payload.subtotal !== undefined ? payload.subtotal : gTot);
+      const receipt = {
+        id: payload.id || `REC-${Date.now()}`,
+        timestamp: Number(payload.timestamp) || Date.now(),
+        subtotal: subTot,
+        taxRate: Number(payload.taxRate) || 0.17,
+        taxAmount: Number(payload.taxAmount) || (gTot - subTot),
+        grandTotal: gTot,
+        employeeName: payload.employeeName || "Cashier",
+        customerName: payload.customerName || null,
+        ticketNote: payload.ticketNote || null,
+        isRefund: !!payload.isRefund || type === 'RECEIPT_REFUNDED',
+        originalReceiptId: payload.originalReceiptId || null,
+        payments: Array.isArray(payload.payments) ? payload.payments : [],
+        items: Array.isArray(payload.items) ? payload.items : []
+      };
+
+      // 1. PostgreSQL Persistent Atomic Upsert
+      if (pgPool) {
+        try {
+          await pgPool.query(`
+            INSERT INTO receipts (
+              id, timestamp, subtotal, tax_rate, tax_amount, grand_total,
+              employee_name, customer_name, ticket_note, is_refund, original_receipt_id,
+              payments, items
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (id) DO UPDATE SET
+              subtotal = EXCLUDED.subtotal,
+              grand_total = EXCLUDED.grand_total,
+              is_refund = EXCLUDED.is_refund
+          `, [
+            receipt.id, receipt.timestamp, receipt.subtotal, receipt.taxRate, receipt.taxAmount, receipt.grandTotal,
+            receipt.employeeName, receipt.customerName, receipt.ticketNote, receipt.isRefund, receipt.originalReceiptId,
+            JSON.stringify(receipt.payments), JSON.stringify(receipt.items)
+          ]);
+        } catch (err) {
+          console.error("[CloudSync] Postgres receipt insert error:", err.message);
+        }
+      }
+
+      // 2. In-Memory Store Update & Deduplication
+      const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
+      if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
+      else db.receipts.unshift(receipt);
+
+      // 3. Process Automatic Ingredient Depletion & KDS Station Routing!
+      if (!receipt.isRefund) {
+        processRecipeDepletionAndKDS(receipt, db);
+      }
+
+      acknowledgedIds.push(eventId);
+    } else {
+      acknowledgedIds.push(eventId);
+    }
+  }
+
+  saveFileData(db);
+
+  res.json({
+    success: true,
+    message: "Delta sync completed successfully",
+    syncedAt: Date.now(),
+    acknowledgedIds,
+    items: db.items,
+    categories: db.categories
+  });
+});
+
+// -------------------------------------------------------------
+// 12. Receipts Log & CSV Exports
+// -------------------------------------------------------------
+app.get('/api/receipts', async (req, res) => {
+  const db = loadFileData();
+  const sorted = [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  res.json(sorted);
+});
+
+app.get('/api/export/receipts', async (req, res) => {
+  const db = loadFileData();
+  const receipts = db.receipts || [];
+  let csv = "Receipt ID,Timestamp,Date,Employee,Customer,Subtotal,Tax,Grand Total,Payment Methods,Items Summary,Is Refund\n";
+
+  receipts.forEach(r => {
+    const d = new Date(r.timestamp).toISOString();
+    const paymentsStr = Array.isArray(r.payments) ? r.payments.map(p => `${p.type}: ${p.amount}`).join(" | ") : "";
+    const itemsStr = Array.isArray(r.items) ? r.items.map(i => `${i.name} (x${i.quantity})`).join(" ; ") : "";
+    csv += `"${r.id}",${r.timestamp},"${d}","${r.employeeName || ''}","${r.customerName || ''}",${r.subtotal},${r.taxAmount},${r.grandTotal},"${paymentsStr}","${itemsStr}",${r.isRefund ? 'YES' : 'NO'}\n`;
+  });
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="openpos_receipts_export.csv"');
+  res.send(csv);
+});
+
+app.get('/api/export/items', async (req, res) => {
+  const db = loadFileData();
+  const items = db.items || [];
+  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\n";
+
+  items.forEach(i => {
+    csv += `"${i.id}","${i.name}",${i.price},"${i.categoryId || ''}","${i.barcode || ''}",${i.stockQuantity || 0},"${i.station || 'HOT_KITCHEN'}",${i.prepTimeMinutes || 5}\n`;
+  });
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="openpos_catalog_export.csv"');
+  res.send(csv);
+});
+
+// -------------------------------------------------------------
+// 13. Danger Zone Reset
+// -------------------------------------------------------------
+app.post('/api/reset', requireManagerPin, async (req, res) => {
+  await initPgTables();
+  if (pgPool) {
+    try {
+      await pgPool.query('TRUNCATE TABLE receipts, items, categories, shifts, audit_logs');
+    } catch (_) {}
+  }
+
+  const db = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  saveFileData(db);
+  logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req);
+
+  res.json({ success: true, message: "All cloud store data reset to clean restaurant default template." });
+});
+
+module.exports = app;
+ + values.length); }
+      const sql = 'SELECT id, receipt_id AS "receiptId", channel, order_number AS "orderNumber", table_number AS "tableNumber", customer_name AS "customerName", station, items, status, created_at AS "createdAt", target_ready_at AS "targetReadyAt", completed_at AS "completedAt" FROM kitchen_orders ' + (filters.length ? 'WHERE ' + filters.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT 200';
+      const result = await pgPool.query(sql, values); return res.json(result.rows);
+    } catch (error) { console.error('[KDS] PostgreSQL read failed:', error.message); return res.status(503).json({ error: 'Kitchen data is temporarily unavailable.' }); }
+  }
+  if (isVercel) return res.status(503).json({ error: 'Persistent kitchen storage is not configured.' });
+  let tickets = loadFileData().kitchenOrders || [];
+  if (station && station !== 'ALL') tickets = tickets.filter(t => t.station === station);
+  if (status) tickets = tickets.filter(t => t.status === status);
   res.json(tickets);
 });
 

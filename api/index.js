@@ -595,6 +595,29 @@ app.use("/api", (req, res, next) => {
   });
 });
 
+// Cloudflare Staging/Production must be backed by the configured PostgreSQL database.
+// This gate prevents any route from reaching demo defaults or local-file fallbacks when
+// Hyperdrive is missing or the persistent schema cannot be initialized.
+app.use("/api", async (req, res, next) => {
+  if (!isCloudflareWorker) return next();
+  try {
+    await initPgTables();
+    if (!pgPool || !tablesInitialized) {
+      return res.status(503).json({
+        error: "Persistent database unavailable.",
+        message: "OpenPOS is not serving business data until PostgreSQL is connected and initialized."
+      });
+    }
+    return next();
+  } catch (error) {
+    console.error("[DB] Cloudflare request gate failed:", error?.code || "UNKNOWN");
+    return res.status(503).json({
+      error: "Persistent database unavailable.",
+      message: "The PostgreSQL schema could not be initialized."
+    });
+  }
+});
+
 // Compatibility middleware name retained for existing route declarations.
 // It now checks server-verified Supabase identity, not a shared API key.
 function requireApiKey(req, res, next) {

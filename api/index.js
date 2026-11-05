@@ -310,10 +310,37 @@ function configureDatabase(connectionString) {
     pgPool = new Pool({
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
-      ...(isCloudflareWorker ? { options: "-c role=openpos_app" } : {}),
       max: 10,
       idleTimeoutMillis: 30000
     });
+
+    // Supabase's transaction pooler may ignore PostgreSQL startup role options.
+    // Switch every Cloudflare checkout explicitly before handing the client to API code.
+    if (isCloudflareWorker) {
+      const originalConnect = pgPool.connect.bind(pgPool);
+      pgPool.connect = function connectAsRestrictedRole(callback) {
+        if (typeof callback === "function") {
+          return originalConnect((error, client, release) => {
+            if (error) return callback(error);
+            client.query("SET ROLE openpos_app")
+              .then(() => callback(null, client, release))
+              .catch((roleError) => {
+                release(roleError);
+                callback(roleError);
+              });
+          });
+        }
+        return originalConnect().then(async (client) => {
+          try {
+            await client.query("SET ROLE openpos_app");
+            return client;
+          } catch (roleError) {
+            client.release(roleError);
+            throw roleError;
+          }
+        });
+      };
+    }
     console.log("[DB] Initializing PostgreSQL client connection pool...");
   } catch (err) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);

@@ -557,9 +557,12 @@ function hasAdminRole(user) {
 // Public endpoints required by the customer storefront. All other API routes require
 // a server-verified Supabase session. Never expose order management or POS data publicly.
 function isPublicStorefrontRequest(req) {
+  // Express strips the mounted "/api" prefix from req.path inside this middleware.
+  // Use originalUrl so the allowlist matches the complete API pathname.
+  const pathname = (req.originalUrl || req.path).split("?")[0];
   return (
-    (req.method === "GET" && ["/api/status", "/api/categories", "/api/items"].includes(req.path)) ||
-    (req.method === "POST" && req.path === "/api/online-orders")
+    (req.method === "GET" && ["/api/status", "/api/categories", "/api/items"].includes(pathname)) ||
+    (req.method === "POST" && pathname === "/api/online-orders")
   );
 }
 

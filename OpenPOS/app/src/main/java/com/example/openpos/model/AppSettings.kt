@@ -8,6 +8,5 @@ data class AppSettings(
     val cashierName: String = "Cashier",
     val receiptFooter: String = "Thank you for your visit!",
     val defaultPrinterMac: String? = null,
-    val apiKey: String = "openpos_sec_key_2026",
-    val managerPin: String = "8888"
+    val managerPin: String = ""
 )

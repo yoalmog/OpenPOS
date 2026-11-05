@@ -317,75 +317,31 @@ function configureDatabase(connectionString) {
       statement_timeout: 10000
     });
 
-    // Supabase transaction poolers can reset session state between transactions.
-    // Use SET LOCAL ROLE inside every transaction so all Worker queries are RLS-scoped.
+    // The Hyperdrive origin uses Supabase's session pooler on port 5432.
+    // Set the restricted database role on every checkout before API code receives the client.
     if (isCloudflareWorker) {
       const originalConnect = pgPool.connect.bind(pgPool);
-
-      const wrapClient = (client) => {
-        const originalQuery = client.query.bind(client);
-        client.query = function queryWithRestrictedRole(query, values, callback) {
-          let params = values;
-          let done = callback;
-          if (typeof values === "function") {
-            done = values;
-            params = undefined;
-          }
-          const sql = typeof query === "string" ? query : query?.text || "";
-          if (/^\s*BEGIN\b/i.test(sql)) {
-            if (typeof done === "function") {
-              return originalQuery(query, params, (error, result) => {
-                if (error) return done(error);
-                originalQuery("SET LOCAL ROLE openpos_app", (roleError) => done(roleError || null, result));
-              });
-            }
-            return originalQuery(query, params).then(async (result) => {
-              await originalQuery("SET LOCAL ROLE openpos_app");
-              return result;
-            });
-          }
-          return originalQuery(query, params, done);
-        };
-        return client;
-      };
-
       pgPool.connect = function connectWithRestrictedRole(callback) {
         if (typeof callback === "function") {
           return originalConnect((error, client, release) => {
             if (error) return callback(error);
-            callback(null, wrapClient(client), release);
+            client.query("SET ROLE openpos_app")
+              .then(() => callback(null, client, release))
+              .catch((roleError) => {
+                release(roleError);
+                callback(roleError);
+              });
           });
         }
-        return originalConnect().then(wrapClient);
-      };
-
-      pgPool.query = function queryWithRestrictedRole(query, values, callback) {
-        let params = values;
-        let done = callback;
-        if (typeof values === "function") {
-          done = values;
-          params = undefined;
-        }
-        const operation = (async () => {
-          const client = await originalConnect();
+        return originalConnect().then(async (client) => {
           try {
-            await client.query("BEGIN");
-            await client.query("SET LOCAL ROLE openpos_app");
-            const result = await client.query(query, params);
-            await client.query("COMMIT");
-            return result;
-          } catch (error) {
-            try { await client.query("ROLLBACK"); } catch (_) {}
-            throw error;
-          } finally {
-            client.release();
+            await client.query("SET ROLE openpos_app");
+            return client;
+          } catch (roleError) {
+            client.release(roleError);
+            throw roleError;
           }
-        })();
-        if (typeof done === "function") {
-          operation.then((result) => done(null, result)).catch(done);
-          return;
-        }
-        return operation;
+        });
       };
     }
     console.log("[DB] Initializing PostgreSQL client connection pool...");

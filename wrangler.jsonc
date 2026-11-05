@@ -1,10 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "openpos-cloudflare-staging",
-  // Isolated staging configuration; Production uses a separate deployment.
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-11-05",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "observability": {
     "enabled": true,
@@ -17,5 +18,22 @@
       "binding": "HYPERDRIVE",
       "id": "36d9fda64d0149a19b5a36a2595688e4"
     }
-  ]
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api",
+      "/api/*",
+      "/health",
+      "/health/*",
+      "/order",
+      "/order/",
+      "/kitchen",
+      "/kitchen/"
+    ]
+  },
+  "vars": {
+    "SERVICE_NAME": "openpos-cloudflare-staging"
+  }
 }

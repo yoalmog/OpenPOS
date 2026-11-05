@@ -7,6 +7,7 @@ on:
     branches: [feat/cloudflare-workers-hyperdrive]
     paths:
       - "cloudflare/**"
+      - "scripts/**"
       - "wrangler.jsonc"
       - "package.json"
       - "package-lock.json"
@@ -31,6 +32,9 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Apply Cloudflare Node.js compatibility patch
+        run: node scripts/patch-workers-deps.cjs
 
       - name: Run repository test suite
         run: npm test

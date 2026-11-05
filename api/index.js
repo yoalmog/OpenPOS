@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
 const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
+const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
 
 const app = express();
 
@@ -1615,36 +1616,37 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
         items: Array.isArray(payload.items) ? payload.items : []
       };
 
-      // 1. PostgreSQL Persistent Atomic Upsert
+      // PostgreSQL Production: receipt, recipe stock depletion and KDS tickets
+      // commit together. A failure leaves the event unacknowledged for safe retry.
+      if (isVercel && !pgPool) {
+        return res.status(503).json({
+          success: false,
+          error: "Persistent POS storage is unavailable; receipt was not acknowledged.",
+          acknowledgedIds
+        });
+      }
+
       if (pgPool) {
         try {
-          await pgPool.query(`
-            INSERT INTO receipts (
-              id, timestamp, subtotal, tax_rate, tax_amount, grand_total,
-              employee_name, customer_name, ticket_note, is_refund, original_receipt_id,
-              payments, items
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            ON CONFLICT (id) DO UPDATE SET
-              subtotal = EXCLUDED.subtotal,
-              grand_total = EXCLUDED.grand_total,
-              is_refund = EXCLUDED.is_refund
-          `, [
-            receipt.id, receipt.timestamp, receipt.subtotal, receipt.taxRate, receipt.taxAmount, receipt.grandTotal,
-            receipt.employeeName, receipt.customerName, receipt.ticketNote, receipt.isRefund, receipt.originalReceiptId,
-            JSON.stringify(receipt.payments), JSON.stringify(receipt.items)
-          ]);
-        } catch (err) {
-          console.error("[CloudSync] Postgres receipt insert error:", err.message);
+          await createPosSaleAtomically(pgPool, receipt);
+        } catch (error) {
+          console.error("[CloudSync] Atomic POS sale failed:", error.message);
+          const insufficient = error instanceof InsufficientStockError || error.code === "INSUFFICIENT_STOCK";
+          return res.status(insufficient ? 409 : 503).json({
+            success: false,
+            error: insufficient ? "Insufficient ingredient stock; sale was not committed." : "POS sale could not be committed; retry is safe.",
+            ...(insufficient ? { ingredient: error.ingredientName, required: error.required, available: error.available } : {}),
+            acknowledgedIds
+          });
         }
       }
 
-      // 2. In-Memory Store Update & Deduplication
+      // Keep the local development fallback, but never use it as Production storage.
       const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
       if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
       else db.receipts.unshift(receipt);
 
-      // 3. Process Automatic Ingredient Depletion & KDS Station Routing!
-      if (!receipt.isRefund) {
+      if (!pgPool && !receipt.isRefund) {
         processRecipeDepletionAndKDS(receipt, db);
       }
 

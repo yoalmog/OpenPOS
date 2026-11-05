@@ -28,8 +28,7 @@ class PosRepository private constructor(context: Context? = null) {
             cashierName = prefs?.getString("cashier_name", "Cashier") ?: "Cashier",
             receiptFooter = prefs?.getString("receipt_footer", "Thank you for your visit!") ?: "Thank you for your visit!",
             defaultPrinterMac = prefs?.getString("printer_mac", null),
-            apiKey = prefs?.getString("api_key", "openpos_sec_key_2026") ?: "openpos_sec_key_2026",
-            managerPin = prefs?.getString("manager_pin", "8888") ?: "8888"
+            managerPin = prefs?.getString("manager_pin", "") ?: ""
         )
     )
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -44,7 +43,6 @@ class PosRepository private constructor(context: Context? = null) {
             putString("cashier_name", newSettings.cashierName)
             putString("receipt_footer", newSettings.receiptFooter)
             putString("printer_mac", newSettings.defaultPrinterMac)
-            putString("api_key", newSettings.apiKey)
             putString("manager_pin", newSettings.managerPin)
             apply()
         }
@@ -343,7 +341,7 @@ class PosRepository private constructor(context: Context? = null) {
         val emp = dbHelper?.getEmployeeByPin(pin)
         if (emp != null) return emp
         // Fallback check against manager PIN in settings
-        if (pin == _settings.value.managerPin) {
+        if (_settings.value.managerPin.isNotBlank() && pin == _settings.value.managerPin) {
             return Employee(name = "Manager", pinHash = sha256(pin), role = "Manager")
         }
         return null

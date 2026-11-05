@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: openpos-cloudflare-staging
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy-staging:
@@ -70,7 +70,7 @@ jobs:
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          response="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+          response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 --retry 5 --retry-delay 2 \
             -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
             https://openpos-cloudflare-staging.b4u2store.workers.dev/health/db)"
           printf '%s' "$response" | node -e '
@@ -90,7 +90,7 @@ jobs:
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          response="$(curl --silent --show-error \
+          response="$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
             -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
             https://openpos-cloudflare-staging.b4u2store.workers.dev/health/api)"
           printf '%s' "$response" | node -e '

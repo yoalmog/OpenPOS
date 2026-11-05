@@ -568,7 +568,15 @@ function isPublicStorefrontRequest(req) {
 
 app.use("/api", (req, res, next) => {
   if (isPublicStorefrontRequest(req)) return next();
-  return requireSupabaseAuth(req, res, next);
+  return requireSupabaseAuth(req, res, (error) => {
+    if (error) return next(error);
+    // Until employee permissions are implemented, authenticated API access is owner/admin only.
+    // This prevents ordinary authenticated accounts from reaching routes that lack local role checks.
+    if (!hasAdminRole(req.authUser)) {
+      return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required." });
+    }
+    return next();
+  });
 });
 
 // Compatibility middleware name retained for existing route declarations.

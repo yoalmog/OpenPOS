@@ -22,7 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class SupabaseAuthManager(
     context: Context,
-    private val apiBaseUrl: String
+    var apiBaseUrl: String
 ) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences("openpos_secure_auth", Context.MODE_PRIVATE)

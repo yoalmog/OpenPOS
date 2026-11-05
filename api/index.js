@@ -1084,76 +1084,40 @@ app.get('/api/online-orders', async (req, res) => {
 });
 
 app.post('/api/online-orders', async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: 'Persistent order storage is unavailable. Please try again later.' });
   const db = loadFileData();
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
-
-  if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
-    return res.status(400).json({ error: "customerName and a valid items array are required." });
-  }
-
-  // Prices and item names are authoritative only when read from the server catalog.
-  // The browser may submit itemId, quantity and notes, but never controls the price.
-  const catalogItems = Array.isArray(db.items) ? db.items : [];
+  if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) return res.status(400).json({ error: 'customerName and a valid items array are required.' });
   const orderItems = [];
   for (const requestedItem of items) {
-    const catalogItem = catalogItems.find(item => item.id === requestedItem.itemId);
+    const catalogItem = (db.items || []).find(item => item.id === requestedItem.itemId);
     const quantity = Number(requestedItem.quantity);
-    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
-      return res.status(400).json({ error: "An order item is invalid or unavailable." });
-    }
-    orderItems.push({
-      itemId: catalogItem.id,
-      name: catalogItem.name,
-      quantity,
-      price: Number(catalogItem.price),
-      notes: typeof requestedItem.notes === "string" ? requestedItem.notes.slice(0, 500) : ""
-    });
+    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) return res.status(400).json({ error: 'An order item is invalid or unavailable.' });
+    orderItems.push({ itemId: catalogItem.id, name: catalogItem.name, quantity, price: Number(catalogItem.price), notes: typeof requestedItem.notes === 'string' ? requestedItem.notes.slice(0, 500) : '' });
   }
-
-  const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const subtotal = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
-  const now = Date.now();
-  const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
-
-  const order = {
-    id: `ord_${now}_${Math.random().toString(36).substr(2, 4)}`,
-    orderNumber,
-    channel: "WEB_STOREFRONT",
-    deliveryType: deliveryType || "TAKEAWAY",
-    tableNumber: tableNumber || null,
-    customerName: customerName.trim(),
-    customerPhone: customerPhone || "",
-    pickupTime: pickupTime || "Immediate (15-20 min)",
-    notes: notes || "",
-    subtotal,
-    tax,
-    total,
-    paymentMethod: "PAY_ON_PICKUP",
-    paymentStatus: "UNPAID",
-    status: "RECEIVED",
-    items: orderItems,
-    createdAt: now
-  };
-
-  db.onlineOrders.unshift(order);
-
-  // An unpaid web order is not a completed sale: do not create a receipt
-  // or record CARD revenue until a payment provider confirms settlement.
-
-  // Automatic ingredient depletion and KDS Station routing!
-  processRecipeDepletionAndKDS({
-    id: order.id,
-    orderNumber: order.orderNumber,
-    channel: "WEB",
-    tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
-    customerName: `${order.customerName} (${order.customerPhone})`,
-    items: order.items
-  }, db, { depleteInventory: false });
-
-  saveFileData(db);
-  logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
-  res.json({ success: true, order });
+  const now = Date.now(); const orderNumber = 'W-' + Math.floor(100 + Math.random() * 900);
+  const order = { id: 'ord_' + now + '_' + Math.random().toString(36).slice(2, 6), orderNumber, channel: 'WEB_STOREFRONT', deliveryType: deliveryType || 'TAKEAWAY', tableNumber: tableNumber || null, customerName: customerName.trim(), customerPhone: customerPhone || '', pickupTime: pickupTime || 'Immediate (15-20 min)', notes: notes || '', subtotal, tax, total, paymentMethod: 'PAY_ON_PICKUP', paymentStatus: 'UNPAID', status: 'RECEIVED', items: orderItems, createdAt: now };
+  const previousTicketIds = new Set((db.kitchenOrders || []).map(ticket => ticket.id));
+  processRecipeDepletionAndKDS({ id: order.id, orderNumber, channel: 'WEB', tableNumber: order.tableNumber || deliveryType || 'TAKEAWAY', customerName: order.customerName + (customerPhone ? ' (' + customerPhone + ')' : ''), items: orderItems }, db, { depleteInventory: false });
+  const newTickets = (db.kitchenOrders || []).filter(ticket => !previousTicketIds.has(ticket.id));
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('INSERT INTO online_orders (id, order_number, channel, delivery_type, customer_name, customer_phone, pickup_time, subtotal, tax, total, payment_method, payment_status, status, items, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', [order.id, order.orderNumber, order.channel, order.deliveryType, order.customerName, order.customerPhone, order.pickupTime, order.subtotal, order.tax, order.total, order.paymentMethod, order.paymentStatus, order.status, JSON.stringify(order.items), order.createdAt]);
+    for (const ticket of newTickets) {
+      await client.query('INSERT INTO kitchen_orders (id, receipt_id, channel, order_number, table_number, customer_name, station, items, status, created_at, target_ready_at, completed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [ticket.id, order.id, ticket.channel, ticket.orderNumber, ticket.tableNumber, ticket.customerName, ticket.station, JSON.stringify(ticket.items), ticket.status, ticket.createdAt, ticket.targetReadyAt, ticket.completedAt]);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK'); console.error('[Orders] PostgreSQL transaction failed:', error.message);
+    return res.status(503).json({ error: 'Order could not be saved. Please retry.' });
+  } finally { client.release(); }
+  // Intentionally do not create a receipt, record a payment, or deplete inventory for unpaid online orders.
+  logAudit('ONLINE_ORDER_PLACED', { orderNumber, total, customer: order.customerName }, req);
+  return res.status(201).json({ success: true, order, kitchenTicketsCreated: newTickets.length });
 });
 
 app.post('/api/online-orders/:id/status', async (req, res) => {

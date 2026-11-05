@@ -34,6 +34,11 @@ class MainActivity : ComponentActivity() {
 
     LocalizationManager.init(this)
     val repository = PosRepository.getInstance(this)
+    val storedServerUrl = repository.settings.value.syncServerUrl
+    val productionServerUrl = "https://openpos.b4u2store.workers.dev"
+    if (!storedServerUrl.startsWith("https://")) {
+      repository.updateSettings(repository.settings.value.copy(syncServerUrl = productionServerUrl))
+    }
     val authManager = FirebaseAuthManager()
     repository.syncManager?.accessTokenProvider = authManager::getValidIdToken
 

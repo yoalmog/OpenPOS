@@ -37,13 +37,30 @@ export default {
       }
       try {
         const connectionString = workerEnv.HYPERDRIVE?.connectionString;
-        if (connectionString) app.configureDatabase(connectionString);
+        const pool = connectionString ? app.configureDatabase(connectionString) : null;
+        if (!pool) {
+          return Response.json({ status: "error", databasePoolConfigured: false }, { status: 503 });
+        }
+        const dbResult = await pool.query("SELECT 1 AS connected");
+
+        const configRequest = new Request(new URL("/api/auth-config", request.url), { method: "GET" });
+        const configResponse = await expressHandler.fetch(configRequest);
+        const authConfig = await configResponse.json();
+
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
         const response = await expressHandler.fetch(probe);
+        const databaseConnected = dbResult.rows[0]?.connected === 1;
+        const authConfigured = authConfig.configured === true;
+        const authProtected = response.status === 401;
+        const ok = databaseConnected && authConfigured && authProtected;
+
         return Response.json({
-          status: response.status === 401 ? "ok" : "unexpected",
-          expressStatus: response.status
-        }, { status: response.status === 401 ? 200 : 503 });
+          status: ok ? "ok" : "unexpected",
+          databasePoolConfigured: true,
+          databaseConnected,
+          supabaseConfigured: authConfigured,
+          unauthenticatedStatus: response.status
+        }, { status: ok ? 200 : 503 });
       } catch (error) {
         console.error("OpenPOS protected API probe failed", {
           name: error?.name || "Error",

@@ -101,8 +101,10 @@ export default {
 
       try {
         await client.connect();
-        await client.query("SET ROLE openpos_app");
+        await client.query("BEGIN");
+        await client.query("SET LOCAL ROLE openpos_app");
         const result = await client.query("SELECT 1 AS connected, current_user AS database_role");
+        await client.query("COMMIT");
         const connected = result.rows[0]?.connected === 1 &&
           result.rows[0]?.database_role === "openpos_app";
         return Response.json({

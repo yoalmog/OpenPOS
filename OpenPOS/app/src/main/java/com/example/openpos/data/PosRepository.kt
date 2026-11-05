@@ -49,7 +49,6 @@ class PosRepository private constructor(context: Context? = null) {
             apply()
         }
         syncManager?.serverUrl = newSettings.syncServerUrl
-        syncManager?.apiKey = newSettings.apiKey
     }
 
     // Categories List
@@ -96,7 +95,6 @@ class PosRepository private constructor(context: Context? = null) {
         }
 
         syncManager?.serverUrl = _settings.value.syncServerUrl
-        syncManager?.apiKey = _settings.value.apiKey
 
         // Setup two-way sync catalog receiver
         syncManager?.onCatalogReceived = { serverItems, serverCategories ->

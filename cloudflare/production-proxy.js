@@ -1,5 +1,7 @@
 export default {
   async fetch(request, env) {
-    return env.UPSTREAM.fetch(request);
+    const upstreamUrl = new URL(request.url);
+    upstreamUrl.hostname = "openpos-cloudflare-staging.b4u2store.workers.dev";
+    return env.UPSTREAM.fetch(new Request(upstreamUrl, request));
   }
 };

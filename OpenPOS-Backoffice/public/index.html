@@ -970,6 +970,28 @@
           return nativeFetch(input, init);
         };
 
+        // Downloads use fetch so protected CSV endpoints also receive the bearer token.
+        document.addEventListener('click', async event => {
+          const link = event.target.closest('a[href^="/api/export/"]');
+          if (!link) return;
+          event.preventDefault();
+          try {
+            const response = await window.fetch(link.href);
+            if (!response.ok) throw new Error('Export failed (' + response.status + ').');
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const downloadLink = document.createElement('a');
+            downloadLink.href = objectUrl;
+            downloadLink.download = link.href.split('/').pop() || 'openpos-export.csv';
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            downloadLink.remove();
+            URL.revokeObjectURL(objectUrl);
+          } catch (error) {
+            loginError.textContent = error.message || 'Could not download export.';
+          }
+        });
+
         form.addEventListener('submit', async event => {
           event.preventDefault();
           loginError.textContent = '';

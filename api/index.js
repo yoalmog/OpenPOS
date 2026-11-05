@@ -677,10 +677,34 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
 // -------------------------------------------------------------
 app.get('/api/status', async (req, res) => {
   await initPgTables();
+
+  // A configured pool is not proof that PostgreSQL is reachable. Verify a real
+  // round-trip before reporting persistent storage as available.
+  let databaseConnected = false;
+  let databaseError = null;
+  if (pgPool) {
+    try {
+      await pgPool.query('SELECT 1 AS health_check');
+      databaseConnected = true;
+    } catch (error) {
+      databaseError = error.message;
+      console.error("[DB] Health check failed:", error.message);
+    }
+  }
+
   const db = loadFileData();
-  res.json({
-    status: "online",
-    storageEngine: pgPool ? "PostgreSQL (Persistent Cloud DB)" : (isVercel ? "Serverless /tmp + Memory" : "Local File System"),
+  const persistentStorage = databaseConnected;
+  const status = isVercel && !persistentStorage ? "degraded" : "online";
+  res.status(status === "online" ? 200 : 503).json({
+    status,
+    storageEngine: persistentStorage
+      ? "PostgreSQL (connection verified)"
+      : (isVercel ? "Serverless /tmp + Memory (NOT PERSISTENT)" : "Local File System"),
+    database: {
+      configured: Boolean(dbUrl),
+      connected: databaseConnected
+    },
+    ...(databaseError ? { databaseError: "PostgreSQL connection failed" } : {}),
     platform: isVercel ? "Vercel Serverless" : "Node Server",
     system: "OpenPOS Restaurant & Cafe Cloud Edition",
     version: "3.5.0",

@@ -37,3 +37,45 @@ jobs:
       - name: Assemble Android debug APK
         working-directory: OpenPOS
         run: bash ./gradlew :app:assembleDebug
+
+  production-http-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check public production pages and APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://openpos-liart.vercel.app"
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+
+          check_http() {
+            local path="$1"
+            local expected="$2"
+            local body="$TMP/body"
+            local metrics
+            metrics="$(curl --silent --show-error --location --max-time 20 -o "$body" -w '%{http_code} %{time_total}' "$BASE$path")"
+            local code="${metrics%% *}"
+            local elapsed="${metrics#* }"
+            echo "$path -> HTTP $code in ${elapsed}s (expected $expected)"
+            test "$code" = "$expected"
+            cp "$body" "$3"
+          }
+
+          for path in / /order /kitchen; do
+            check_http "$path" 200 "$TMP/page"
+          done
+
+          check_http /api/status 200 "$TMP/status.json"
+          node -e "const x=require(process.argv[1]); if(x.status!=='online') process.exit(1); console.log('API status:',x.status,'storage:',x.storageEngine)" "$TMP/status.json"
+
+          check_http /api/categories 200 "$TMP/categories.json"
+          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) process.exit(1); console.log('Categories:',x.length)" "$TMP/categories.json"
+
+          check_http /api/items 200 "$TMP/items.json"
+          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) process.exit(1); console.log('Items:',x.length)" "$TMP/items.json"
+
+          for path in /api/kitchen/tickets /api/online-orders; do
+            check_http "$path" 401 "$TMP/protected.json"
+          done

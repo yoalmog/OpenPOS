@@ -105,7 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BASE="https://openpos-liart.vercel.app"
+          BASE="https://openpos.b4u2store.workers.dev"
           TMP="$(mktemp -d)"
           trap 'rm -rf "$TMP"' EXIT
 

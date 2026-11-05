@@ -71,7 +71,8 @@ export default {
         probeStage = "private_route_auth";
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
         const response = await expressHandler.fetch(probe);
-        const databaseConnected = dbResult.rows[0]?.connected === 1;
+        const databaseConnected = dbResult.rows[0]?.connected === 1 &&
+          dbResult.rows[0]?.database_role === "openpos_app";
         const authConfigured = authConfig.configured === true;
         const authProtected = response.status === 401;
         const ok = databaseConnected && authConfigured && authProtected;

@@ -1,39 +1,13 @@
+import "./env-bootstrap.js";
+import app from "../api/index.js";
 import { Client } from "pg";
 import { httpServerHandler } from "cloudflare:node";
-import process from "node:process";
-import { createRequire } from "node:module";
+
+app.listen(8787);
+const expressHandler = httpServerHandler({ port: 8787 });
 
 function unauthorized() {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
-}
-
-// Express is loaded lazily inside the first non-health request. Cloudflare
-// does not permit asynchronous module loading from the Worker global scope.
-let expressHandlerPromise;
-
-function getExpressHandler(workerEnv) {
-  if (!expressHandlerPromise) {
-    // Hyperdrive supplies its connection string at runtime. Other values are
-    // also mapped explicitly so the legacy API can keep its existing config.
-    process.env.OPENPOS_RUNTIME = "cloudflare";
-    process.env.DATABASE_URL = workerEnv.HYPERDRIVE?.connectionString || "";
-    process.env.PG_NO_SSL = "1";
-    process.env.SUPABASE_URL = workerEnv.SUPABASE_URL || "";
-    process.env.SUPABASE_ANON_KEY = workerEnv.SUPABASE_ANON_KEY || "";
-    process.env.OPENPOS_OWNER_USER_ID = workerEnv.OPENPOS_OWNER_USER_ID || "";
-
-    try {
-      const require = createRequire(import.meta.url);
-      const app = require("../api/index.js");
-      app.listen(8787);
-      expressHandlerPromise = Promise.resolve(httpServerHandler({ port: 8787 }));
-    } catch (error) {
-      // Allow a later request to retry initialization after a transient error.
-      expressHandlerPromise = undefined;
-      throw error;
-    }
-  }
-  return expressHandlerPromise;
 }
 
 export default {
@@ -62,9 +36,8 @@ export default {
         return unauthorized();
       }
       try {
-        const handler = await getExpressHandler(workerEnv);
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
-        const response = await handler(probe);
+        const response = await expressHandler(probe);
         return Response.json({
           status: response.status === 401 ? "ok" : "unexpected",
           expressStatus: response.status
@@ -130,17 +103,6 @@ export default {
       }
     }
 
-    try {
-      const handler = await getExpressHandler(workerEnv);
-      return handler(request);
-    } catch (error) {
-      console.error("OpenPOS Express initialization failed", {
-        code: error?.code || "UNKNOWN"
-      });
-      return Response.json(
-        { error: "API initialization failed" },
-        { status: 503 }
-      );
-    }
+    return expressHandler(request);
   }
 };

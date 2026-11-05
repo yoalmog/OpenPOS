@@ -127,7 +127,7 @@ class SupabaseAuthManager(
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val responseText = stream?.let {
-                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use(BufferedReader::readText)
+                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
             }.orEmpty()
             if (status !in 200..299) {
                 val error = try { JSONObject(responseText) } catch (_: Exception) { JSONObject() }

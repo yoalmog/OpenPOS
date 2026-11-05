@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
 
 const app = express();
 
@@ -411,7 +412,8 @@ async function initPgTables() {
         status TEXT DEFAULT 'PENDING',
         created_at BIGINT NOT NULL,
         target_ready_at BIGINT NOT NULL,
-        completed_at BIGINT
+        completed_at BIGINT,
+        ticket_data JSONB
       );
 
       CREATE TABLE IF NOT EXISTS online_orders (
@@ -429,7 +431,8 @@ async function initPgTables() {
         payment_status TEXT,
         status TEXT DEFAULT 'RECEIVED',
         items JSONB NOT NULL,
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        order_data JSONB
       );
 
       CREATE TABLE IF NOT EXISTS waste_logs (
@@ -491,6 +494,9 @@ async function initPgTables() {
         timestamp BIGINT NOT NULL,
         ip TEXT
       );
+
+      ALTER TABLE kitchen_orders ADD COLUMN IF NOT EXISTS ticket_data JSONB;
+      ALTER TABLE online_orders ADD COLUMN IF NOT EXISTS order_data JSONB;
 
       CREATE INDEX IF NOT EXISTS idx_pg_receipts_ts ON receipts (timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_pg_items_cat ON items (category_id);
@@ -1048,55 +1054,60 @@ app.get('/api/recipes/profitability', async (req, res) => {
 // 6. Kitchen Display System (KDS) & Routing Stations API
 // -------------------------------------------------------------
 app.get('/api/kitchen/tickets', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (pgPool) {
+    try { return res.json(await listKitchenTickets(pgPool, req.query)); }
+    catch (error) { console.error("[DB] KDS ticket read failed:", error.message); return res.status(503).json({ error: "Could not read persistent kitchen tickets." }); }
+  }
   const db = loadFileData();
   let tickets = db.kitchenOrders || [];
   const { station, status } = req.query;
-
-  if (station && station !== 'ALL') {
-    tickets = tickets.filter(t => t.station === station);
-  }
-  if (status) {
-    tickets = tickets.filter(t => t.status === status);
-  }
-
+  if (station && station !== 'ALL') tickets = tickets.filter(t => t.station === station);
+  if (status) tickets = tickets.filter(t => t.status === status);
   res.json(tickets);
 });
 
 app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
   if (!items || !station) return res.status(400).json({ error: "station and items are required." });
-
   const now = Date.now();
   const ticket = {
     id: `ticket_${now}_${Math.random().toString(36).substr(2, 4)}`,
     orderNumber: String(orderNumber || Math.floor(100 + Math.random() * 900)),
-    channel: channel || "POS",
-    tableNumber: tableNumber || null,
-    customerName: customerName || "Walk-in Guest",
-    station,
-    items,
-    status: "PENDING",
-    createdAt: now,
-    targetReadyAt: now + (5 * 60 * 1000),
-    completedAt: null
+    channel: channel || "POS", tableNumber: tableNumber || null,
+    customerName: customerName || "Walk-in Guest", station, items,
+    status: "PENDING", createdAt: now, targetReadyAt: now + (5 * 60 * 1000), completedAt: null
   };
-
-  db.kitchenOrders.unshift(ticket);
-  saveFileData(db);
-  res.json({ success: true, ticket });
+  try {
+    if (pgPool) await createKitchenTicket(pgPool, ticket);
+    else { const db = loadFileData(); db.kitchenOrders.unshift(ticket); saveFileData(db); }
+    return res.json({ success: true, ticket });
+  } catch (error) {
+    console.error("[DB] KDS ticket insert failed:", error.message);
+    return res.status(503).json({ error: "The kitchen ticket could not be safely saved." });
+  }
 });
 
 app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
+  if (!["PENDING", "PREPARING", "READY", "SERVED"].includes(status)) return res.status(400).json({ error: "Invalid ticket status." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (pgPool) {
+    try {
+      const completedAt = status === "READY" || status === "SERVED" ? Date.now() : null;
+      const ticket = await updateKitchenTicketStatus(pgPool, req.params.id, status, completedAt);
+      return ticket ? res.json({ success: true, ticket }) : res.status(404).json({ error: "Ticket not found." });
+    } catch (error) { console.error("[DB] KDS status update failed:", error.message); return res.status(503).json({ error: "Could not update persistent kitchen ticket." }); }
+  }
+  const db = loadFileData();
   const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
   if (!ticket) return res.status(404).json({ error: "Ticket not found." });
-
-  ticket.status = status; // PENDING, PREPARING, READY, SERVED
-  if (status === 'READY' || status === 'SERVED') {
-    ticket.completedAt = Date.now();
-  }
+  ticket.status = status;
+  if (status === "READY" || status === "SERVED") ticket.completedAt = Date.now();
   saveFileData(db);
   res.json({ success: true, ticket });
 });
@@ -1105,11 +1116,19 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
 // 7. Omnichannel Online Ordering API (Web Storefront / Deliveries)
 // -------------------------------------------------------------
 app.get('/api/online-orders', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (pgPool) {
+    try { return res.json(await listOnlineOrders(pgPool)); }
+    catch (error) { console.error("[DB] Online order read failed:", error.message); return res.status(503).json({ error: "Could not read persistent online orders." }); }
+  }
   const db = loadFileData();
   res.json(db.onlineOrders || []);
 });
 
 app.post('/api/online-orders', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   const db = loadFileData();
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
 
@@ -1162,33 +1181,48 @@ app.post('/api/online-orders', async (req, res) => {
     createdAt: now
   };
 
-  db.onlineOrders.unshift(order);
-
   // An unpaid web order is not a completed sale: do not create a receipt
   // or record CARD revenue until a payment provider confirms settlement.
 
-  // Automatic ingredient depletion and KDS Station routing!
+  // Generate station tickets without mutating inventory; persist both records atomically.
+  const ticketDb = { ...db, kitchenOrders: [], ingredients: JSON.parse(JSON.stringify(db.ingredients || [])) };
   processRecipeDepletionAndKDS({
-    id: order.id,
-    orderNumber: order.orderNumber,
-    channel: "WEB",
-    tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
-    customerName: `${order.customerName} (${order.customerPhone})`,
+    id: order.id, orderNumber: order.orderNumber, channel: "WEB",
+    tableNumber: order.tableNumber || order.deliveryType,
+    customerName: order.customerName + (order.customerPhone ? " (" + order.customerPhone + ")" : ""),
     items: order.items
-  }, db, { depleteInventory: false });
-
-  saveFileData(db);
+  }, ticketDb, { depleteInventory: false });
+  const tickets = ticketDb.kitchenOrders || [];
+  try {
+    if (pgPool) await createOnlineOrderWithTickets(pgPool, order, tickets);
+    else {
+      db.onlineOrders.unshift(order);
+      db.kitchenOrders = [...tickets, ...(db.kitchenOrders || [])].slice(0, 80);
+      saveFileData(db);
+    }
+  } catch (error) {
+    console.error("[DB] Atomic online order/KDS insert failed:", error.message);
+    return res.status(503).json({ error: "The order could not be safely saved. Please retry." });
+  }
   logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);
-  res.json({ success: true, order });
+  res.json({ success: true, order, kitchenTickets: tickets.length });
 });
 
 app.post('/api/online-orders/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
+  if (!["RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "Invalid order status." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (pgPool) {
+    try {
+      const order = await updateOnlineOrderStatus(pgPool, req.params.id, status);
+      return order ? res.json({ success: true, order }) : res.status(404).json({ error: "Order not found." });
+    } catch (error) { console.error("[DB] Online order status update failed:", error.message); return res.status(503).json({ error: "Could not update persistent online order." }); }
+  }
+  const db = loadFileData();
   const order = (db.onlineOrders || []).find(o => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: "Order not found." });
-
-  order.status = status; // RECEIVED, PREPARING, READY, COMPLETED, CANCELLED
+  order.status = status;
   saveFileData(db);
   res.json({ success: true, order });
 });

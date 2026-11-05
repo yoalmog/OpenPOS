@@ -1183,8 +1183,6 @@ app.post('/api/online-orders', async (req, res) => {
     createdAt: now
   };
 
-  db.onlineOrders.unshift(order);
-
   // An unpaid web order is not a completed sale: do not create a receipt
   // or record CARD revenue until a payment provider confirms settlement.
 

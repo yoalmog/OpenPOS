@@ -1,25 +1,39 @@
 import { Client } from "pg";
 import { httpServerHandler } from "cloudflare:node";
-import { env } from "cloudflare:workers";
 import process from "node:process";
 
 function unauthorized() {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
 }
 
-// Map Cloudflare bindings into the legacy API's Node.js configuration before
-// loading it. Hyperdrive owns the upstream TLS connection, so pg must not
-// attempt to establish a second TLS layer.
-process.env.OPENPOS_RUNTIME = "cloudflare";
-process.env.DATABASE_URL = env.HYPERDRIVE?.connectionString || "";
-process.env.PG_NO_SSL = "1";
-process.env.SUPABASE_URL = env.SUPABASE_URL || "";
-process.env.SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY || "";
-process.env.OPENPOS_OWNER_USER_ID = env.OPENPOS_OWNER_USER_ID || "";
+// Express is loaded lazily inside the first non-health request. Cloudflare
+// does not permit asynchronous module loading from the Worker global scope.
+let expressHandlerPromise;
 
-const { default: app } = await import("../api/index.js");
-app.listen(8787);
-const expressHandler = httpServerHandler({ port: 8787 });
+function getExpressHandler(workerEnv) {
+  if (!expressHandlerPromise) {
+    // Hyperdrive supplies its connection string at runtime. Other values are
+    // also mapped explicitly so the legacy API can keep its existing config.
+    process.env.OPENPOS_RUNTIME = "cloudflare";
+    process.env.DATABASE_URL = workerEnv.HYPERDRIVE?.connectionString || "";
+    process.env.PG_NO_SSL = "1";
+    process.env.SUPABASE_URL = workerEnv.SUPABASE_URL || "";
+    process.env.SUPABASE_ANON_KEY = workerEnv.SUPABASE_ANON_KEY || "";
+    process.env.OPENPOS_OWNER_USER_ID = workerEnv.OPENPOS_OWNER_USER_ID || "";
+
+    expressHandlerPromise = import("../api/index.js")
+      .then(({ default: app }) => {
+        app.listen(8787);
+        return httpServerHandler({ port: 8787 });
+      })
+      .catch((error) => {
+        // Allow a later request to retry initialization after a transient error.
+        expressHandlerPromise = undefined;
+        throw error;
+      });
+  }
+  return expressHandlerPromise;
+}
 
 export default {
   async fetch(request, workerEnv) {
@@ -32,7 +46,7 @@ export default {
       return Response.json({
         status: "ok",
         service: "openpos-cloudflare-staging",
-        api: "express",
+        api: "express_lazy",
         database: "not_checked"
       });
     }
@@ -85,6 +99,17 @@ export default {
       }
     }
 
-    return expressHandler(request);
+    try {
+      const handler = await getExpressHandler(workerEnv);
+      return handler(request);
+    } catch (error) {
+      console.error("OpenPOS Express initialization failed", {
+        code: error?.code || "UNKNOWN"
+      });
+      return Response.json(
+        { error: "API initialization failed" },
+        { status: 503 }
+      );
+    }
   }
 };

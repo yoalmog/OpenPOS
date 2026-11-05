@@ -85,6 +85,21 @@ async function createOnlineOrderWithTickets(pool, order, tickets) {
   }
 }
 
+async function createKitchenTicket(pool, ticket) {
+  await pool.query(
+    `INSERT INTO kitchen_orders (
+      id, receipt_id, channel, order_number, table_number, customer_name,
+      station, items, status, created_at, target_ready_at, completed_at, ticket_data
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [
+      ticket.id, ticket.receiptId || null, ticket.channel, ticket.orderNumber,
+      ticket.tableNumber, ticket.customerName, ticket.station, JSON.stringify(ticket.items),
+      ticket.status, ticket.createdAt, ticket.targetReadyAt, ticket.completedAt, JSON.stringify(ticket)
+    ]
+  );
+  return ticket;
+}
+
 async function listOnlineOrders(pool) {
   const result = await pool.query(
     "SELECT id, order_number, channel, delivery_type, customer_name, customer_phone, pickup_time, subtotal, tax, total, payment_method, payment_status, status, items, created_at, order_data FROM online_orders ORDER BY created_at DESC"
@@ -137,6 +152,7 @@ async function updateKitchenTicketStatus(pool, id, status, completedAt) {
 
 module.exports = {
   createOnlineOrderWithTickets,
+  createKitchenTicket,
   listOnlineOrders,
   listKitchenTickets,
   updateOnlineOrderStatus,

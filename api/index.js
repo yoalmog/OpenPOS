@@ -6,6 +6,7 @@ const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, lis
 const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
 const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
 const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
+const { ensureOperationalTables, getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
 
 const app = express();
 
@@ -504,6 +505,7 @@ async function initPgTables() {
       CREATE INDEX IF NOT EXISTS idx_pg_receipts_ts ON receipts (timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_pg_items_cat ON items (category_id);
     `);
+    await ensureOperationalTables(pgPool);
     tablesInitialized = true;
     console.log("[DB] PostgreSQL schema initialized successfully.");
   } catch (err) {
@@ -605,18 +607,26 @@ function requireManagerPin(req, res, next) {
 }
 
 // Audit Logger
-function logAudit(action, details, req) {
+async function logAudit(action, details, req) {
   const entry = {
+    id: `audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     timestamp: Date.now(),
     action,
     details: details || {},
     ip: req ? (req.headers['x-forwarded-for'] || req.socket?.remoteAddress) : 'SYSTEM'
   };
+  if (pgPool) {
+    await initPgTables();
+    await upsertOperationalRecord(pgPool, "audit_logs", entry);
+    return entry;
+  }
+  if (isVercel) throw new Error("Persistent audit storage is unavailable.");
   const store = loadFileData();
   store.auditLogs = store.auditLogs || [];
   store.auditLogs.unshift(entry);
   if (store.auditLogs.length > 100) store.auditLogs = store.auditLogs.slice(0, 100);
   saveFileData(store);
+  return entry;
 }
 
 // -------------------------------------------------------------
@@ -688,67 +698,74 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
 // -------------------------------------------------------------
 app.get('/api/status', async (req, res) => {
   await initPgTables();
-
-  // A configured pool is not proof that PostgreSQL is reachable. Verify a real
-  // round-trip before reporting persistent storage as available.
   let databaseConnected = false;
-  let databaseError = null;
   if (pgPool) {
     try {
       await pgPool.query('SELECT 1 AS health_check');
       databaseConnected = true;
     } catch (error) {
-      databaseError = error.message;
       console.error("[DB] Health check failed:", error.message);
     }
   }
-
-  const db = loadFileData();
-  let persistentCatalogCounts = null;
+  if (isVercel && (!pgPool || !tablesInitialized || !databaseConnected)) {
+    return res.status(503).json({
+      status: "degraded",
+      storageEngine: "PostgreSQL unavailable",
+      database: { configured: Boolean(dbUrl), connected: databaseConnected },
+      system: "OpenPOS Restaurant & Cafe Cloud Edition",
+      version: "3.5.0",
+      timestamp: Date.now()
+    });
+  }
+  let storeInfo = null;
+  let counts = { items: 0, categories: 0, receipts: 0, recipes: 0, ingredients: 0, kitchenTickets: 0, onlineOrders: 0 };
   if (databaseConnected) {
     try {
-      const catalogCounts = await pgPool.query(
-        `SELECT
+      storeInfo = await getStoreSettings(pgPool);
+      const result = await pgPool.query(`
+        SELECT
           (SELECT COUNT(*)::int FROM items) AS items,
           (SELECT COUNT(*)::int FROM categories) AS categories,
+          (SELECT COUNT(*)::int FROM receipts) AS receipts,
+          (SELECT COUNT(*)::int FROM recipes) AS recipes,
           (SELECT COUNT(*)::int FROM ingredients) AS ingredients,
-          (SELECT COUNT(*)::int FROM recipes) AS recipes`
-      );
-      persistentCatalogCounts = catalogCounts.rows[0];
+          (SELECT COUNT(*)::int FROM kitchen_orders WHERE status <> 'SERVED') AS kitchen_tickets,
+          (SELECT COUNT(*)::int FROM online_orders) AS online_orders
+      `);
+      const row = result.rows[0] || {};
+      counts = {
+        items: Number(row.items || 0), categories: Number(row.categories || 0),
+        receipts: Number(row.receipts || 0), recipes: Number(row.recipes || 0),
+        ingredients: Number(row.ingredients || 0), kitchenTickets: Number(row.kitchen_tickets || 0),
+        onlineOrders: Number(row.online_orders || 0)
+      };
     } catch (error) {
-      console.error("[DB] Catalog count read failed:", error.message);
-      return res.status(503).json({ status: "degraded", error: "Persistent catalog health check failed." });
+      console.error("[DB] Persistent status read failed:", error.message);
+      return res.status(503).json({ status: "degraded", error: "Persistent status data is unavailable." });
     }
+  } else if (!isVercel) {
+    const local = loadFileData();
+    storeInfo = local.storeInfo || null;
+    counts = {
+      items: (local.items || []).length, categories: (local.categories || []).length,
+      receipts: (local.receipts || []).length, recipes: (local.recipes || []).length,
+      ingredients: (local.ingredients || []).length,
+      kitchenTickets: (local.kitchenOrders || []).filter(t => t.status !== "SERVED").length,
+      onlineOrders: (local.onlineOrders || []).length
+    };
   }
-  const persistentStorage = databaseConnected;
-  const status = isVercel && !persistentStorage ? "degraded" : "online";
-  res.status(status === "online" ? 200 : 503).json({
-    status,
-    storageEngine: persistentStorage
-      ? "PostgreSQL (connection verified)"
-      : (isVercel ? "Serverless /tmp + Memory (NOT PERSISTENT)" : "Local File System"),
-    database: {
-      configured: Boolean(dbUrl),
-      connected: databaseConnected
-    },
-    ...(databaseError ? { databaseError: "PostgreSQL connection failed" } : {}),
+  res.json({
+    status: "online",
+    storageEngine: databaseConnected ? "PostgreSQL (connection verified)" : "Local File System (development only)",
+    database: { configured: Boolean(dbUrl), connected: databaseConnected },
     platform: isVercel ? "Vercel Serverless" : "Node Server",
     system: "OpenPOS Restaurant & Cafe Cloud Edition",
     version: "3.5.0",
     timestamp: Date.now(),
-    storeName: db.storeInfo.name,
-    currency: db.storeInfo.currency,
-    taxRate: db.storeInfo.taxRate,
-    counts: {
-      // Catalog, recipes and ingredients counts reflect PostgreSQL in production.
-      items: persistentCatalogCounts ? persistentCatalogCounts.items : (db.items || []).length,
-      categories: persistentCatalogCounts ? persistentCatalogCounts.categories : (db.categories || []).length,
-      receipts: (db.receipts || []).length,
-      recipes: persistentCatalogCounts ? persistentCatalogCounts.recipes : (db.recipes || []).length,
-      ingredients: persistentCatalogCounts ? persistentCatalogCounts.ingredients : (db.ingredients || []).length,
-      kitchenTickets: (db.kitchenOrders || []).filter(t => t.status !== 'SERVED').length,
-      onlineOrders: (db.onlineOrders || []).length
-    }
+    storeName: storeInfo?.name || null,
+    currency: storeInfo?.currency || null,
+    taxRate: storeInfo?.taxRate ?? null,
+    counts
   });
 });
 
@@ -756,17 +773,43 @@ app.post('/api/store', async (req, res) => {
   if (!hasAdminRole(req.authUser)) {
     return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required to change store configuration." });
   }
-
-  const db = loadFileData();
-  const { name, currency, taxRate, address } = req.body;
-  if (name) db.storeInfo.name = name;
-  if (currency) db.storeInfo.currency = currency;
-  if (taxRate !== undefined) db.storeInfo.taxRate = Number(taxRate);
-  if (address) db.storeInfo.address = address;
-  saveFileData(db);
-
-  logAudit("STORE_CONFIG_UPDATED", { name, currency, taxRate }, req);
-  res.json({ success: true, storeInfo: db.storeInfo });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ error: "Persistent store settings are unavailable." });
+  }
+  const { name, currency, taxRate, address } = req.body || {};
+  let storeInfo;
+  if (pgPool) {
+    try {
+      const current = await getStoreSettings(pgPool) || {};
+      const updated = { ...current };
+      if (name !== undefined) updated.name = String(name);
+      if (currency !== undefined) updated.currency = String(currency);
+      if (taxRate !== undefined) {
+        const parsedTaxRate = Number(taxRate);
+        if (!Number.isFinite(parsedTaxRate) || parsedTaxRate < 0 || parsedTaxRate > 100) {
+          return res.status(400).json({ error: "taxRate must be between 0 and 100." });
+        }
+        updated.taxRate = parsedTaxRate;
+      }
+      if (address !== undefined) updated.address = String(address);
+      storeInfo = await saveStoreSettings(pgPool, updated);
+    } catch (error) {
+      console.error("[DB] Store settings save failed:", error.message);
+      return res.status(503).json({ error: "Store settings could not be saved." });
+    }
+  } else {
+    const db = loadFileData();
+    if (name !== undefined) db.storeInfo.name = name;
+    if (currency !== undefined) db.storeInfo.currency = currency;
+    if (taxRate !== undefined) db.storeInfo.taxRate = Number(taxRate);
+    if (address !== undefined) db.storeInfo.address = address;
+    saveFileData(db);
+    storeInfo = db.storeInfo;
+  }
+  try { await logAudit("STORE_CONFIG_UPDATED", { name, currency, taxRate }, req); }
+  catch (error) { console.error("[Audit] Store config audit write failed:", error.message); }
+  res.json({ success: true, storeInfo });
 });
 
 // -------------------------------------------------------------

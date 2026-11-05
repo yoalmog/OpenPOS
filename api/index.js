@@ -1094,15 +1094,22 @@ app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
 });
 
 app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
-  const db = loadFileData();
   const { status } = req.body;
+  if (!["PENDING", "PREPARING", "READY", "SERVED"].includes(status)) return res.status(400).json({ error: "Invalid ticket status." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (pgPool) {
+    try {
+      const completedAt = status === "READY" || status === "SERVED" ? Date.now() : null;
+      const ticket = await updateKitchenTicketStatus(pgPool, req.params.id, status, completedAt);
+      return ticket ? res.json({ success: true, ticket }) : res.status(404).json({ error: "Ticket not found." });
+    } catch (error) { console.error("[DB] KDS status update failed:", error.message); return res.status(503).json({ error: "Could not update persistent kitchen ticket." }); }
+  }
+  const db = loadFileData();
   const ticket = (db.kitchenOrders || []).find(t => t.id === req.params.id);
   if (!ticket) return res.status(404).json({ error: "Ticket not found." });
-
-  ticket.status = status; // PENDING, PREPARING, READY, SERVED
-  if (status === 'READY' || status === 'SERVED') {
-    ticket.completedAt = Date.now();
-  }
+  ticket.status = status;
+  if (status === "READY" || status === "SERVED") ticket.completedAt = Date.now();
   saveFileData(db);
   res.json({ success: true, ticket });
 });

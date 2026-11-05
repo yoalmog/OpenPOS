@@ -21,7 +21,7 @@ export default {
       return Response.json({
         status: "ok",
         service: "openpos-cloudflare-staging",
-        api: "express_lazy",
+        api: "express",
         database: "not_checked"
       });
     }
@@ -36,6 +36,8 @@ export default {
         return unauthorized();
       }
       try {
+        const connectionString = workerEnv.HYPERDRIVE?.connectionString;
+        if (connectionString) app.configureDatabase(connectionString);
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
         const response = await expressHandler(probe);
         return Response.json({
@@ -103,6 +105,8 @@ export default {
       }
     }
 
+    const connectionString = workerEnv.HYPERDRIVE?.connectionString;
+    if (connectionString) app.configureDatabase(connectionString);
     return expressHandler(request);
   }
 };

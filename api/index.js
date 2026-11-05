@@ -1118,6 +1118,12 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
 // 7. Omnichannel Online Ordering API (Web Storefront / Deliveries)
 // -------------------------------------------------------------
 app.get('/api/online-orders', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (pgPool) {
+    try { return res.json(await listOnlineOrders(pgPool)); }
+    catch (error) { console.error("[DB] Online order read failed:", error.message); return res.status(503).json({ error: "Could not read persistent online orders." }); }
+  }
   const db = loadFileData();
   res.json(db.onlineOrders || []);
 });

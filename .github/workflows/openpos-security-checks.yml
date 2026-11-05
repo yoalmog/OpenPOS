@@ -51,7 +51,7 @@ jobs:
       - name: Cache stable Android debug signing key
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
+          path: ~/.config/.android/debug.keystore
           key: openpos-android-debug-keystore-v1-${{ runner.os }}
       - name: Assemble Android debug APK
         working-directory: OpenPOS

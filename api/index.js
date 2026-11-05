@@ -1668,8 +1668,11 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
   console.log(`[CloudSync] Incoming sync packet from ${body.client || 'POS'} with ${events.length} delta events`);
 
   for (const ev of events) {
-    const eventId = ev.id;
-    const type = ev.type;
+    const eventId = ev?.id;
+    const type = ev?.type;
+    if (!eventId || typeof eventId !== 'string' || !type || typeof type !== 'string') {
+      return res.status(400).json({ success: false, error: "Every sync event must include a string id and type.", acknowledgedIds });
+    }
     let payload = ev.payload;
     if (typeof payload === 'string') {
       try {
@@ -1738,7 +1741,11 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
 
       acknowledgedIds.push(eventId);
     } else {
-      acknowledgedIds.push(eventId);
+      return res.status(422).json({
+        success: false,
+        error: `Unsupported sync event type: ${type}. Event was not acknowledged.`,
+        acknowledgedIds
+      });
     }
   }
 
@@ -1864,18 +1871,19 @@ app.get('/api/export/items', async (req, res) => {
 // 13. Danger Zone Reset
 // -------------------------------------------------------------
 app.post('/api/reset', requireManagerPin, async (req, res) => {
-  await initPgTables();
-  if (pgPool) {
-    try {
-      await pgPool.query('TRUNCATE TABLE receipts, items, categories, shifts, audit_logs');
-    } catch (_) {}
+  // Destructive reset is intentionally disabled until a verified backup/export,
+  // explicit confirmation workflow, and complete tenant-scoped reset are implemented.
+  try {
+    await logAudit("STORE_RESET_BLOCKED", {
+      reason: "Reset endpoint is disabled to protect production data."
+    }, req);
+  } catch (error) {
+    console.error("[Audit] Blocked reset audit write failed:", error.message);
   }
-
-  const db = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  saveFileData(db);
-  try { await logAudit("STORE_RESET_EXECUTED", { reason: "Admin requested full reset" }, req); } catch (error) { console.error("[Audit] Reset audit write failed:", error.message); }
-
-  res.json({ success: true, message: "All cloud store data reset to clean restaurant default template." });
+  return res.status(409).json({
+    success: false,
+    error: "Store reset is temporarily disabled to protect existing business data. No data was deleted."
+  });
 });
 
 module.exports = app;

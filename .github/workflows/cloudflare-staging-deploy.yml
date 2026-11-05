@@ -83,7 +83,7 @@ jobs:
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          response="$(curl --fail --silent --show-error \
+          response="$(curl --silent --show-error \
             -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
             https://openpos-cloudflare-staging.b4u2store.workers.dev/health/api)"
           printf '%s' "$response" | node -e '

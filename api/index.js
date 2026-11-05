@@ -1671,27 +1671,72 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
 // -------------------------------------------------------------
 // 12. Receipts Log & CSV Exports
 // -------------------------------------------------------------
-app.get('/api/receipts', async (req, res) => {
+async function listReceiptsForApi() {
+  await initPgTables();
+  if (pgPool) {
+    const result = await pgPool.query(`
+      SELECT id, timestamp, subtotal, tax_rate, tax_amount, grand_total,
+             employee_name, customer_name, ticket_note, is_refund,
+             original_receipt_id, payments, items
+      FROM receipts
+      ORDER BY timestamp DESC
+    `);
+    return result.rows.map(row => ({
+      id: row.id,
+      timestamp: Number(row.timestamp),
+      subtotal: Number(row.subtotal),
+      taxRate: Number(row.tax_rate),
+      taxAmount: Number(row.tax_amount),
+      grandTotal: Number(row.grand_total),
+      employeeName: row.employee_name || "Cashier",
+      customerName: row.customer_name || null,
+      ticketNote: row.ticket_note || null,
+      isRefund: Boolean(row.is_refund),
+      originalReceiptId: row.original_receipt_id || null,
+      payments: typeof row.payments === "string" ? JSON.parse(row.payments) : (row.payments || []),
+      items: typeof row.items === "string" ? JSON.parse(row.items) : (row.items || [])
+    }));
+  }
+  if (isVercel) throw new Error("Persistent receipt storage is unavailable.");
   const db = loadFileData();
-  const sorted = [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-  res.json(sorted);
+  return [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+app.get('/api/receipts', async (req, res) => {
+  try {
+    res.json(await listReceiptsForApi());
+  } catch (error) {
+    console.error("[Receipts] PostgreSQL read failed:", error.message);
+    res.status(503).json({ error: "Receipt history is temporarily unavailable." });
+  }
 });
 
 app.get('/api/export/receipts', async (req, res) => {
-  const db = loadFileData();
-  const receipts = db.receipts || [];
-  let csv = "Receipt ID,Timestamp,Date,Employee,Customer,Subtotal,Tax,Grand Total,Payment Methods,Items Summary,Is Refund\n";
-
-  receipts.forEach(r => {
-    const d = new Date(r.timestamp).toISOString();
-    const paymentsStr = Array.isArray(r.payments) ? r.payments.map(p => `${p.type}: ${p.amount}`).join(" | ") : "";
-    const itemsStr = Array.isArray(r.items) ? r.items.map(i => `${i.name} (x${i.quantity})`).join(" ; ") : "";
-    csv += `"${r.id}",${r.timestamp},"${d}","${r.employeeName || ''}","${r.customerName || ''}",${r.subtotal},${r.taxAmount},${r.grandTotal},"${paymentsStr}","${itemsStr}",${r.isRefund ? 'YES' : 'NO'}\n`;
-  });
-
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="openpos_receipts_export.csv"');
-  res.send(csv);
+  try {
+    const receipts = await listReceiptsForApi();
+    let csv = "Receipt ID,Timestamp,Date,Employee,Customer,Subtotal,Tax,Grand Total,Payment Methods,Items Summary,Is Refund\\n";
+    receipts.forEach(r => {
+      const timestamp = Number(r.timestamp) || 0;
+      const date = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "";
+      const paymentsStr = Array.isArray(r.payments) ? r.payments.map(p => `${p.type}: ${p.amount}`).join(" | ") : "";
+      const itemsStr = Array.isArray(r.items) ? r.items.map(i => `${i.name || i.itemName || i.itemId || "Item"} (x${i.quantity || 1})`).join(" ; ") : "";
+      csv += [
+        r.id, timestamp, date, r.employeeName, r.customerName,
+        r.subtotal, r.taxAmount, r.grandTotal, paymentsStr, itemsStr,
+        r.isRefund ? "YES" : "NO"
+      ].map(csvEscape).join(",") + "\\n";
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="openpos_receipts_export.csv"');
+    res.send(csv);
+  } catch (error) {
+    console.error("[Receipts] PostgreSQL export failed:", error.message);
+    res.status(503).json({ error: "Receipt export is temporarily unavailable." });
+  }
 });
 
 app.get('/api/export/items', async (req, res) => {

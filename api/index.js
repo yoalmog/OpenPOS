@@ -1657,7 +1657,10 @@ app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) =>
 // -------------------------------------------------------------
 app.post('/api/sync', requireApiKey, async (req, res) => {
   await initPgTables();
-  const db = loadFileData();
+  if (isVercel && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ success: false, error: "Persistent POS sync storage is unavailable." });
+  }
+  const db = pgPool ? null : loadFileData();
   const body = req.body || {};
   const events = Array.isArray(body.events) ? body.events : [];
   const acknowledgedIds = [];
@@ -1723,9 +1726,11 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
       }
 
       // Keep the local development fallback, but never use it as Production storage.
-      const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
-      if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
-      else db.receipts.unshift(receipt);
+      if (db) {
+        const existingIdx = db.receipts.findIndex(r => r.id === receipt.id);
+        if (existingIdx >= 0) db.receipts[existingIdx] = receipt;
+        else db.receipts.unshift(receipt);
+      }
 
       if (!pgPool && !receipt.isRefund) {
         processRecipeDepletionAndKDS(receipt, db);
@@ -1737,15 +1742,24 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
     }
   }
 
-  saveFileData(db);
-
+  if (db) saveFileData(db);
+  let items = db?.items || [];
+  let categories = db?.categories || [];
+  if (pgPool) {
+    try {
+      [items, categories] = await Promise.all([listPgItems(), listPgCategories()]);
+    } catch (error) {
+      console.error("[CloudSync] Catalog snapshot query failed:", error.message);
+      return res.status(503).json({ success: false, error: "Sync was stored, but the catalog snapshot is unavailable.", acknowledgedIds });
+    }
+  }
   res.json({
     success: true,
     message: "Delta sync completed successfully",
     syncedAt: Date.now(),
     acknowledgedIds,
-    items: db.items,
-    categories: db.categories
+    items,
+    categories
   });
 });
 

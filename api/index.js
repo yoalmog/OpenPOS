@@ -323,10 +323,29 @@ function configureDatabase(connectionString) {
 
 if (dbUrl) configureDatabase(dbUrl);
 
-// In-Memory / File Fallback State
-let inMemoryStore = JSON.parse(JSON.stringify(DEFAULT_DATA));
+// In-Memory / File Fallback State.
+// Production runtimes start empty and must never inherit demo fixtures or local files.
+const EMPTY_PRODUCTION_DATA = {
+  storeInfo: null,
+  categories: [],
+  items: [],
+  ingredients: [],
+  recipes: [],
+  kitchenOrders: [],
+  onlineOrders: [],
+  wasteLogs: [],
+  temperatureLogs: [],
+  checklists: [],
+  shifts: [],
+  receipts: [],
+  auditLogs: []
+};
+let inMemoryStore = JSON.parse(JSON.stringify(
+  isProductionRuntime ? EMPTY_PRODUCTION_DATA : DEFAULT_DATA
+));
 
 function loadFileData() {
+  if (isProductionRuntime) return inMemoryStore;
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');

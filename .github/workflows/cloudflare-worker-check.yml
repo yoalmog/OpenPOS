@@ -3,6 +3,8 @@ name: Cloudflare Worker dry-run
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [feat/cloudflare-workers-hyperdrive]
     paths:
       - "cloudflare/**"
       - "wrangler.jsonc"

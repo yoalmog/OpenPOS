@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   createOnlineOrderWithTickets,
+  createKitchenTicket,
   listOnlineOrders,
   listKitchenTickets,
   updateOnlineOrderStatus,
@@ -72,6 +73,12 @@ test("rolls back both writes when KDS ticket insertion fails", async () => {
   assert.ok(sql.includes("ROLLBACK"));
   assert.ok(!sql.includes("COMMIT"));
   assert.ok(sql.includes("RELEASE"));
+});
+
+test("persists standalone KDS tickets", async () => {
+  const pool = fakePool();
+  await createKitchenTicket(pool, tickets[0]);
+  assert.ok(pool.calls.some(call => call.sql.includes("INSERT INTO kitchen_orders")));
 });
 
 test("reads persisted online orders and KDS tickets", async () => {

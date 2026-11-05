@@ -78,3 +78,13 @@ jobs:
               console.log("OpenPOS staging database connection verified.");
             });
           '
+
+      - name: Verify Express API and reject unauthenticated access
+        run: |
+          status="$(curl --silent --show-error --output /tmp/openpos-auth-check.json --write-out '%{http_code}' \
+            https://openpos-cloudflare-staging.b4u2store.workers.dev/api/store)"
+          if [ "$status" != "401" ]; then
+            echo "::error::Expected unauthenticated API request to return 401, received $status"
+            exit 1
+          fi
+          echo "OpenPOS Express API is responding and rejects unauthenticated requests."

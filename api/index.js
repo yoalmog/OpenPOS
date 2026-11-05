@@ -8,6 +8,7 @@ const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-s
 const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
 const { ensureOperationalTables, getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
 const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
+const { validateSyncEvent } = require('./lib/sync-validation');
 
 const app = express();
 
@@ -1668,21 +1669,15 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
   console.log(`[CloudSync] Incoming sync packet from ${body.client || 'POS'} with ${events.length} delta events`);
 
   for (const ev of events) {
-    const eventId = ev?.id;
-    const type = ev?.type;
-    if (!eventId || typeof eventId !== 'string' || !type || typeof type !== 'string') {
-      return res.status(400).json({ success: false, error: "Every sync event must include a string id and type.", acknowledgedIds });
+    const validation = validateSyncEvent(ev);
+    if (!validation.valid) {
+      return res.status(validation.status).json({
+        success: false,
+        error: validation.error,
+        acknowledgedIds
+      });
     }
-    let payload = ev.payload;
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload);
-      } catch (_) {
-        payload = {};
-      }
-    }
-
-    if (!payload || typeof payload !== 'object') continue;
+    const { id: eventId, type, payload } = validation;
 
     if (type === 'RECEIPT_CREATED' || type === 'RECEIPT_REFUNDED') {
       const gTot = Number(payload.grandTotal !== undefined ? payload.grandTotal : (payload.total !== undefined ? payload.total : 0));
@@ -1740,12 +1735,6 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
       }
 
       acknowledgedIds.push(eventId);
-    } else {
-      return res.status(422).json({
-        success: false,
-        error: `Unsupported sync event type: ${type}. Event was not acknowledged.`,
-        acknowledgedIds
-      });
     }
   }
 

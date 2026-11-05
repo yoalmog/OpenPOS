@@ -8,7 +8,7 @@ const app = express();
 // Supabase is the sole API identity provider. Missing configuration fails closed.
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "b245f371-9154-4dd3-aa4c-a5fb5266e5d3";
+const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
 
 // Determine environment
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;

@@ -23,3 +23,13 @@ test("missing ids and malformed payloads are rejected", () => {
   assert.equal(validateSyncEvent({ id: "evt", type: "RECEIPT_CREATED", payload: "{" }).status, 400);
   assert.equal(validateSyncEvent({ id: "evt", type: "RECEIPT_CREATED", payload: [] }).status, 400);
 });
+
+test("Android SQLite numeric event ids are accepted without changing their type", () => {
+  const result = validateSyncEvent({ id: 42, type: "RECEIPT_CREATED", payload: { id: "receipt-42" } });
+  assert.deepEqual(result, { valid: true, id: 42, type: "RECEIPT_CREATED", payload: { id: "receipt-42" } });
+});
+
+test("non-integer and unsafe numeric event ids are rejected", () => {
+  assert.equal(validateSyncEvent({ id: 1.5, type: "RECEIPT_CREATED", payload: {} }).status, 400);
+  assert.equal(validateSyncEvent({ id: Number.MAX_SAFE_INTEGER + 1, type: "RECEIPT_CREATED", payload: {} }).status, 400);
+});

@@ -20,10 +20,26 @@ export default {
       }
       return Response.json({
         status: "ok",
-        service: "openpos-cloudflare-staging",
+        service: workerEnv.SERVICE_NAME || "openpos",
         api: "express",
         database: "not_checked"
       });
+    }
+
+    const isApiOrHealthPath =
+      url.pathname === "/api" ||
+      url.pathname.startsWith("/api/") ||
+      url.pathname === "/health" ||
+      url.pathname.startsWith("/health/");
+
+    if (!isApiOrHealthPath) {
+      if (!workerEnv.ASSETS) {
+        return Response.json({ error: "Static asset binding is not configured" }, { status: 503 });
+      }
+      const assetUrl = new URL(request.url);
+      if (url.pathname === "/order" || url.pathname === "/order/") assetUrl.pathname = "/order.html";
+      if (url.pathname === "/kitchen" || url.pathname === "/kitchen/") assetUrl.pathname = "/kitchen.html";
+      return workerEnv.ASSETS.fetch(new Request(assetUrl, request));
     }
 
     if (url.pathname === "/health/api") {

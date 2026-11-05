@@ -3,7 +3,7 @@ name: Deploy OpenPOS Cloudflare staging
 on:
   workflow_dispatch:
   push:
-    branches: [feat/cloudflare-static-assets]
+    branches: [main, feat/cloudflare-static-assets]
     paths:
       - "cloudflare/**"
       - "api/**"

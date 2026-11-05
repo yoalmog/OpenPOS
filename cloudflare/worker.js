@@ -75,7 +75,8 @@ export default {
         });
         return Response.json({
           status: "error",
-          error: error?.message || "API initialization failed"
+          error: error?.message || "API initialization failed",
+          stack: error?.stack ? error.stack.split("\n").slice(0, 8).join("\n") : null
         }, { status: 503 });
       }
     }

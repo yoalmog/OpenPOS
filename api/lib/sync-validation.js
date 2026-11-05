@@ -4,8 +4,10 @@ function validateSyncEvent(event) {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     return { valid: false, status: 400, error: "Sync event must be an object." };
   }
-  if (typeof event.id !== "string" || !event.id.trim() || typeof event.type !== "string" || !event.type.trim()) {
-    return { valid: false, status: 400, error: "Every sync event must include a string id and type." };
+  const validStringId = typeof event.id === "string" && event.id.trim().length > 0;
+  const validNumericId = typeof event.id === "number" && Number.isSafeInteger(event.id) && event.id > 0;
+  if ((!validStringId && !validNumericId) || typeof event.type !== "string" || !event.type.trim()) {
+    return { valid: false, status: 400, error: "Every sync event must include a non-empty string or positive integer id and a type." };
   }
   if (!SUPPORTED_SYNC_EVENT_TYPES.has(event.type)) {
     return { valid: false, status: 422, error: `Unsupported sync event type: ${event.type}. Event was not acknowledged.` };

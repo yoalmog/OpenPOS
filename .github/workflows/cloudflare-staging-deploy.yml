@@ -1,0 +1,113 @@
+name: Deploy OpenPOS Cloudflare staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/cloudflare-static-assets]
+    paths:
+      - "cloudflare/**"
+      - "api/**"
+      - "supabase/migrations/**"
+      - "wrangler.jsonc"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/cloudflare-staging-deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openpos-cloudflare-staging-v6
+  cancel-in-progress: true
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required repository secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::Missing GitHub Actions secret CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "::error::Missing GitHub Actions secret CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$OPENPOS_HEALTH_TOKEN" || { echo "::error::Missing GitHub Actions secret OPENPOS_HEALTH_TOKEN"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Apply Cloudflare Node.js compatibility patch
+        run: node scripts/patch-workers-deps.cjs
+
+      - name: Run OpenPOS test suite
+        run: npm test
+
+      - name: Sync protected health token to staging Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if printf '%s' "$OPENPOS_HEALTH_TOKEN" | npx --yes wrangler@4 secret put OPENPOS_HEALTH_TOKEN --config=wrangler.jsonc; then
+              exit 0
+            fi
+            echo "Cloudflare secret update attempt $attempt failed; retrying after backoff."
+            sleep $((attempt * 3))
+          done
+          echo "::error::Unable to update the staging health secret after 5 attempts."
+          exit 1
+
+      - name: Deploy isolated staging Worker
+        run: npx --yes wrangler@4 deploy --config=wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify static storefront, ordering, and kitchen routes
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://openpos-cloudflare-staging.b4u2store.workers.dev";
+          const paths = ["/", "/order", "/kitchen", "/style.css", "/app.js"];
+          for (const path of paths) {
+            const response = await fetch(new URL(path, base));
+            if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+            console.log(`${path}: HTTP ${response.status}`);
+          }
+          NODE
+
+      - name: Verify Express API and reject unauthenticated access
+        env:
+          OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
+        run: |
+          response="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 2 \
+            -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
+            https://openpos-cloudflare-staging.b4u2store.workers.dev/health/api)"
+          printf '%s' "$response" | node -e '
+            let body = "";
+            process.stdin.on("data", chunk => body += chunk);
+            process.stdin.on("end", () => {
+              const result = JSON.parse(body);
+              if (
+                result.status !== "ok" ||
+                result.databaseConnected !== true ||
+                result.supabaseConfigured !== true ||
+                result.unauthenticatedStatus !== 401
+              ) {
+                console.error("Express API readiness probe failed:", result);
+                process.exit(1);
+              }
+              console.log("OpenPOS API pool, Supabase configuration, and auth boundary verified.");
+            });
+          '

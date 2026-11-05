@@ -902,65 +902,118 @@
   <div class="toast-container" id="toastContainer"></div>
 
 
-  <!-- Firebase Google Sign-In -->
+  <!-- Supabase Authentication -->
   <section id="openposLogin" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0b1220;color:#e5e7eb;font-family:'Plus Jakarta Sans',sans-serif;">
-    <div style="width:min(100%,420px);padding:36px;border:1px solid #273449;border-radius:20px;background:#111b2d;text-align:center;box-shadow:0 24px 70px #0005;">
+    <form id="openposLoginForm" style="width:min(100%,420px);padding:36px;border:1px solid #273449;border-radius:20px;background:#111b2d;text-align:center;box-shadow:0 24px 70px #0005;">
       <div style="font-size:32px;color:#60a5fa;margin-bottom:12px;"><i class="fa-solid fa-cash-register"></i></div>
       <h1 style="margin:0 0 8px;font-size:28px;">OpenPOS</h1>
-      <p style="color:#9ca3af;margin:0 0 28px;">Sign in to your restaurant back office</p>
-      <button id="googleSignInBtn" type="button" style="width:100%;display:flex;align-items:center;justify-content:center;gap:12px;padding:13px 18px;border:1px solid #3b4960;border-radius:10px;background:#f9fafb;color:#111827;font-size:15px;font-weight:700;cursor:pointer;">
+      <p style="color:#9ca3af;margin:0 0 24px;">Sign in to your restaurant back office</p>
+      <input id="openposEmail" type="email" autocomplete="username" required placeholder="Email" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:12px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <input id="openposPassword" type="password" autocomplete="current-password" required placeholder="Password" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:14px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <button id="emailSignInBtn" type="submit" style="width:100%;padding:13px 18px;border:0;border-radius:10px;background:#2563eb;color:white;font-size:15px;font-weight:700;cursor:pointer;">Sign in with Supabase</button>
+      <button id="googleSignInBtn" type="button" style="width:100%;margin-top:10px;padding:13px 18px;border:1px solid #3b4960;border-radius:10px;background:#f9fafb;color:#111827;font-size:15px;font-weight:700;cursor:pointer;">
         <i class="fa-brands fa-google"></i> Continue with Google
       </button>
       <p id="loginError" role="alert" style="color:#fca5a5;font-size:13px;margin:16px 0 0;"></p>
-    </div>
+    </form>
   </section>
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyDOtx561C0C_zmF5D-ZPpuEBdUPwTVqpDM",
-      authDomain: "openpos-web.firebaseapp.com",
-      projectId: "openpos-web",
-      storageBucket: "openpos-web.firebasestorage.app",
-      messagingSenderId: "897391226078",
-      appId: "1:897391226078:web:a97294ff909c44c070a64f",
-      measurementId: "G-W1QMJF0DQL"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const openposAuth = firebase.auth();
-    const loginButton = document.getElementById('googleSignInBtn');
-    const loginError = document.getElementById('loginError');
-    let openposAppLoaded = false;
-    loginButton.addEventListener('click', async () => {
-      loginError.textContent = '';
-      loginButton.disabled = true;
-      loginButton.style.opacity = '.65';
+    (async function initializeOpenPosAuth() {
+      const login = document.getElementById('openposLogin');
+      const appContainer = document.querySelector('.app-container');
+      const loginError = document.getElementById('loginError');
+      const form = document.getElementById('openposLoginForm');
+      const submitButton = document.getElementById('emailSignInBtn');
+      const googleButton = document.getElementById('googleSignInBtn');
+      let openposAppLoaded = false;
+      let openposSupabase;
+
+      function showLogin(message) {
+        login.style.display = 'flex';
+        appContainer.style.display = 'none';
+        if (message) loginError.textContent = message;
+      }
+      function showApp() {
+        login.style.display = 'none';
+        appContainer.style.display = '';
+        if (!openposAppLoaded) {
+          openposAppLoaded = true;
+          const appScript = document.createElement('script');
+          appScript.src = '/app.js';
+          document.body.appendChild(appScript);
+        }
+      }
+
       try {
-        const provider = new firebase.auth.GoogleAuthProvider();
-        await openposAuth.signInWithPopup(provider);
+        const configResponse = await fetch('/api/auth-config', { cache: 'no-store' });
+        const config = await configResponse.json();
+        if (!configResponse.ok || !config.configured) {
+          throw new Error('Supabase is not configured on the server. Set SUPABASE_URL and SUPABASE_ANON_KEY.');
+        }
+        openposSupabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+        });
+        window.openposSupabase = openposSupabase;
+
+        // Attach the current Supabase access token to every same-origin API request.
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = async (input, init = {}) => {
+          const requestUrl = typeof input === 'string' ? input : input.url;
+          const parsedUrl = new URL(requestUrl, window.location.origin);
+          if (parsedUrl.origin === window.location.origin && parsedUrl.pathname.startsWith('/api/') && parsedUrl.pathname !== '/api/auth-config') {
+            const { data } = await openposSupabase.auth.getSession();
+            const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+            if (data.session?.access_token) headers.set('Authorization', 'Bearer ' + data.session.access_token);
+            init = { ...init, headers };
+          }
+          return nativeFetch(input, init);
+        };
+
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          loginError.textContent = '';
+          submitButton.disabled = true;
+          try {
+            const { error } = await openposSupabase.auth.signInWithPassword({
+              email: document.getElementById('openposEmail').value.trim(),
+              password: document.getElementById('openposPassword').value
+            });
+            if (error) throw error;
+          } catch (error) {
+            loginError.textContent = error.message || 'Sign-in failed.';
+          } finally {
+            submitButton.disabled = false;
+          }
+        });
+
+        googleButton.addEventListener('click', async () => {
+          loginError.textContent = '';
+          googleButton.disabled = true;
+          try {
+            const { error } = await openposSupabase.auth.signInWithOAuth({
+              provider: 'google',
+              options: { redirectTo: window.location.origin }
+            });
+            if (error) throw error;
+          } catch (error) {
+            loginError.textContent = error.message || 'Google sign-in failed.';
+            googleButton.disabled = false;
+          }
+        });
+
+        openposSupabase.auth.onAuthStateChange((_event, session) => {
+          if (session) showApp();
+          else showLogin('');
+        });
+        const { data: sessionData, error: sessionError } = await openposSupabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (sessionData.session) showApp();
+        else showLogin('');
       } catch (error) {
-        loginError.textContent = error.code === 'auth/unauthorized-domain'
-          ? 'This domain is not authorized in Firebase Authentication.'
-          : (error.message || 'Google sign-in failed. Please try again.');
-        loginButton.disabled = false;
-        loginButton.style.opacity = '1';
+        showLogin(error.message || 'Could not initialize Supabase authentication.');
       }
-    });
-    openposAuth.onAuthStateChanged(user => {
-      if (!user) {
-        document.getElementById('openposLogin').style.display = 'flex';
-        document.querySelector('.app-container').style.display = 'none';
-        return;
-      }
-      document.getElementById('openposLogin').style.display = 'none';
-      document.querySelector('.app-container').style.display = '';
-      if (!openposAppLoaded) {
-        openposAppLoaded = true;
-        const appScript = document.createElement('script');
-        appScript.src = '/app.js';
-        document.body.appendChild(appScript);
-      }
-    });
+    })();
   </script>
 
   <!-- Chart.js is loaded by the app after authentication -->

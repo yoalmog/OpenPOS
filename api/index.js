@@ -17,9 +17,11 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABA
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
 
-// Determine environment
+// Production runtimes must never use ephemeral/local files as business storage.
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-const DATA_DIR = isVercel ? '/tmp' : path.join(__dirname, '..', 'data');
+const isCloudflareWorker = process.env.OPENPOS_RUNTIME === 'cloudflare';
+const isProductionRuntime = isVercel || isCloudflareWorker;
+const DATA_DIR = isProductionRuntime ? '/tmp' : path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'store_data.json');
 
 try {
@@ -622,7 +624,7 @@ async function logAudit(action, details, req) {
     await upsertOperationalRecord(pgPool, "audit_logs", entry);
     return entry;
   }
-  if (isVercel) throw new Error("Persistent audit storage is unavailable.");
+  if (isProductionRuntime) throw new Error("Persistent audit storage is unavailable.");
   const store = loadFileData();
   store.auditLogs = store.auditLogs || [];
   store.auditLogs.unshift(entry);
@@ -641,7 +643,7 @@ function processRecipeDepletionAndKDS(order, db, options = {}) {
   // so they must not consume stock until staff confirms the order.
   // The legacy file-backed recipe/ingredient arrays are demo fallbacks in Vercel.
   // Never mutate them as if they were authoritative production inventory.
-  if (options.depleteInventory !== false && !isVercel) order.items.forEach(orderItem => {
+  if (options.depleteInventory !== false && !isProductionRuntime) order.items.forEach(orderItem => {
     const itemId = orderItem.itemId || orderItem.id;
     const orderQty = Number(orderItem.quantity || orderItem.qty || 1);
     const recipe = db.recipes.find(r => r.itemId === itemId || r.itemName === orderItem.name);
@@ -709,7 +711,7 @@ app.get('/api/status', async (req, res) => {
       console.error("[DB] Health check failed:", error.message);
     }
   }
-  if (isVercel && (!pgPool || !tablesInitialized || !databaseConnected)) {
+  if (isProductionRuntime && (!pgPool || !tablesInitialized || !databaseConnected)) {
     return res.status(503).json({
       status: "degraded",
       storageEngine: "PostgreSQL unavailable",
@@ -745,7 +747,7 @@ app.get('/api/status', async (req, res) => {
       console.error("[DB] Persistent status read failed:", error.message);
       return res.status(503).json({ status: "degraded", error: "Persistent status data is unavailable." });
     }
-  } else if (!isVercel) {
+  } else if (!isProductionRuntime) {
     const local = loadFileData();
     storeInfo = local.storeInfo || null;
     counts = {
@@ -760,7 +762,7 @@ app.get('/api/status', async (req, res) => {
     status: "online",
     storageEngine: databaseConnected ? "PostgreSQL (connection verified)" : "Local File System (development only)",
     database: { configured: Boolean(dbUrl), connected: databaseConnected },
-    platform: isVercel ? "Vercel Serverless" : "Node Server",
+    platform: isCloudflareWorker ? "Cloudflare Workers" : (isVercel ? "Vercel Serverless" : "Node Server"),
     system: "OpenPOS Restaurant & Cafe Cloud Edition",
     version: "3.5.0",
     timestamp: Date.now(),
@@ -776,7 +778,7 @@ app.post('/api/store', async (req, res) => {
     return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required to change store configuration." });
   }
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) {
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
     return res.status(503).json({ error: "Persistent store settings are unavailable." });
   }
   const { name, currency, taxRate, address } = req.body || {};
@@ -842,7 +844,7 @@ app.get('/api/stats', async (req, res) => {
   let receipts;
   try {
     if (pgPool) receipts = await listReceipts(pgPool, { from: fromTs, to: toTs });
-    else if (isVercel) return res.status(503).json({ error: "Persistent analytics data is unavailable." });
+    else if (isProductionRuntime) return res.status(503).json({ error: "Persistent analytics data is unavailable." });
     else {
       receipts = (loadFileData().receipts || []).filter(receipt =>
         (fromTs === undefined || receipt.timestamp >= fromTs) &&
@@ -949,7 +951,7 @@ async function deletePgItem(id) {
 // -------------------------------------------------------------
 app.get('/api/categories', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) return res.json(await listPgCategories());
     const db = loadFileData();
@@ -962,7 +964,7 @@ app.get('/api/categories', async (req, res) => {
 
 app.post('/api/categories', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   const { name, color } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "Category name is required." });
   const newCat = {
@@ -987,7 +989,7 @@ app.post('/api/categories', requireApiKey, async (req, res) => {
 
 app.get('/api/items', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) return res.json(await listPgItems());
     const db = loadFileData();
@@ -1000,7 +1002,7 @@ app.get('/api/items', async (req, res) => {
 
 app.post('/api/items', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   const item = req.body || {};
   if (!item.name || typeof item.name !== "string" || !item.name.trim() ||
       item.price === undefined || !Number.isFinite(Number(item.price)) || Number(item.price) < 0) {
@@ -1038,7 +1040,7 @@ app.post('/api/items', requireApiKey, async (req, res) => {
 
 app.delete('/api/items/:id', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   try {
     if (pgPool) await deletePgItem(req.params.id);
     else {
@@ -1058,7 +1060,7 @@ app.delete('/api/items/:id', requireApiKey, async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/ingredients', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   try {
     if (pgPool) return res.json(await listIngredients(pgPool));
     const db = loadFileData();
@@ -1071,7 +1073,7 @@ app.get('/api/ingredients', async (req, res) => {
 
 app.post('/api/ingredients', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   const db = pgPool ? null : loadFileData();
   const { id, name, unit, unitCost, currentStock, minThreshold } = req.body;
   const cost = Number(unitCost);
@@ -1105,7 +1107,7 @@ app.post('/api/ingredients', requireApiKey, async (req, res) => {
 
 app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   const { change, newStock, reason } = req.body;
   if ((newStock === undefined && change === undefined) ||
       (newStock !== undefined && (!Number.isFinite(Number(newStock)) || Number(newStock) < 0)) ||
@@ -1139,7 +1141,7 @@ app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/recipes', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
   try {
     if (pgPool) return res.json(await listRecipes(pgPool));
     const db = loadFileData();
@@ -1152,7 +1154,7 @@ app.get('/api/recipes', async (req, res) => {
 
 app.post('/api/recipes', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
   const { itemId, itemName, station, prepTimeMinutes, ingredients, laborCost, allergens, instructions } = req.body;
   if (!itemId || !Array.isArray(ingredients) ||
       ingredients.some(ing => !ing || !ing.ingredientId || !Number.isFinite(Number(ing.quantity)) || Number(ing.quantity) <= 0)) {
@@ -1197,12 +1199,13 @@ app.post('/api/recipes', requireApiKey, async (req, res) => {
 
 app.get('/api/recipes/profitability', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
-  const db = pgPool ? loadFileData() : loadFileData();
-  let items = db.items || [];
-  let categories = db.categories || [];
-  let ingredients = db.ingredients || [];
-  let recipes = db.recipes || [];
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
+  const db = pgPool ? null : loadFileData();
+  let items = db?.items || [];
+  let categories = db?.categories || [];
+  let ingredients = db?.ingredients || [];
+  let recipes = db?.recipes || [];
   try {
     if (pgPool) {
       [items, categories, ingredients, recipes] = await Promise.all([
@@ -1278,7 +1281,7 @@ app.get('/api/recipes/profitability', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/kitchen/tickets', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   if (pgPool) {
     try { return res.json(await listKitchenTickets(pgPool, req.query)); }
     catch (error) { console.error("[DB] KDS ticket read failed:", error.message); return res.status(503).json({ error: "Could not read persistent kitchen tickets." }); }
@@ -1293,7 +1296,7 @@ app.get('/api/kitchen/tickets', async (req, res) => {
 
 app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
   if (!items || !station) return res.status(400).json({ error: "station and items are required." });
   const now = Date.now();
@@ -1318,7 +1321,7 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!["PENDING", "PREPARING", "READY", "SERVED"].includes(status)) return res.status(400).json({ error: "Invalid ticket status." });
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   if (pgPool) {
     try {
       const completedAt = status === "READY" || status === "SERVED" ? Date.now() : null;
@@ -1340,7 +1343,7 @@ app.post('/api/kitchen/tickets/:id/status', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/online-orders', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   if (pgPool) {
     try { return res.json(await listOnlineOrders(pgPool)); }
     catch (error) { console.error("[DB] Online order read failed:", error.message); return res.status(503).json({ error: "Could not read persistent online orders." }); }
@@ -1351,8 +1354,9 @@ app.get('/api/online-orders', async (req, res) => {
 
 app.post('/api/online-orders', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
-  const db = loadFileData();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  const db = pgPool ? null : (isProductionRuntime ? null : loadFileData());
+  if (isProductionRuntime && !pgPool) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   const { customerName, customerPhone, deliveryType, tableNumber, pickupTime, items, notes } = req.body;
 
   if (!customerName || !Array.isArray(items) || items.length === 0 || items.length > 100) {
@@ -1366,7 +1370,7 @@ app.post('/api/online-orders', async (req, res) => {
     orderItems = await buildOnlineOrderItems({
       pool: pgPool,
       requestedItems: items,
-      localCatalog: isVercel ? [] : (db.items || [])
+      localCatalog: isProductionRuntime ? [] : (db.items || [])
     });
   } catch (error) {
     if (error.code === "INVALID_ORDER_ITEM") {
@@ -1377,7 +1381,17 @@ app.post('/api/online-orders', async (req, res) => {
   }
 
   const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const tax = Math.round(subtotal * (db.storeInfo.taxRate / 100) * 100) / 100;
+  let storeSettings;
+  try {
+    storeSettings = pgPool ? await getStoreSettings(pgPool) : db?.storeInfo;
+  } catch (error) {
+    console.error("[DB] Online order store settings read failed:", error.message);
+    return res.status(503).json({ error: "Store tax settings are temporarily unavailable." });
+  }
+  if (!storeSettings || !Number.isFinite(Number(storeSettings.taxRate))) {
+    return res.status(503).json({ error: "Store tax settings have not been configured." });
+  }
+  const tax = Math.round(subtotal * (Number(storeSettings.taxRate) / 100) * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   const now = Date.now();
   const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
@@ -1433,7 +1447,7 @@ app.post('/api/online-orders/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!["RECEIVED", "PREPARING", "READY", "COMPLETED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "Invalid order status." });
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent online-order storage is unavailable." });
   if (pgPool) {
     try {
       const order = await updateOnlineOrderStatus(pgPool, req.params.id, status);
@@ -1453,7 +1467,7 @@ app.post('/api/online-orders/:id/status', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/waste', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
   try {
     const logs = pgPool
       ? await listOperationalRecords(pgPool, "waste_logs")
@@ -1469,7 +1483,7 @@ app.get('/api/waste', async (req, res) => {
 
 app.post('/api/waste', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent waste-log storage is unavailable." });
   const { itemOrIngredientId, name, quantity, unit, cost, reason, loggedBy } = req.body || {};
   const parsedQuantity = Number(quantity);
   const parsedCost = Number(cost || 0);
@@ -1529,7 +1543,7 @@ app.get('/api/forecast', async (req, res) => {
     if (pgPool) {
       const observed = await getHourlyReceiptCounts(pgPool, since);
       observed.forEach(row => { if (row.hour >= 0 && row.hour < 24) hourlyCounts[row.hour] = row.orders; });
-    } else if (isVercel) {
+    } else if (isProductionRuntime) {
       return res.status(503).json({ error: "Persistent forecast data is unavailable." });
     } else {
       (loadFileData().receipts || []).filter(receipt => Number(receipt.timestamp) >= since && !receipt.isRefund)
@@ -1567,7 +1581,7 @@ app.get('/api/forecast', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/safety/temperature', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
   try {
     return res.json(pgPool
       ? await listOperationalRecords(pgPool, "temperature_logs")
@@ -1580,7 +1594,7 @@ app.get('/api/safety/temperature', async (req, res) => {
 
 app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent temperature-log storage is unavailable." });
   const { unitName, targetTempC, actualTempC, checkedBy } = req.body || {};
   if (!unitName || actualTempC === undefined || !Number.isFinite(Number(actualTempC))) {
     return res.status(400).json({ error: "unitName and a valid actualTempC are required." });
@@ -1611,7 +1625,7 @@ app.post('/api/safety/temperature', requireApiKey, async (req, res) => {
 
 app.get('/api/safety/checklists', async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
   try {
     return res.json(pgPool
       ? await listOperationalRecords(pgPool, "checklists")
@@ -1624,7 +1638,7 @@ app.get('/api/safety/checklists', async (req, res) => {
 
 app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent checklist storage is unavailable." });
   const { itemId, done } = req.body || {};
   try {
     if (pgPool) {
@@ -1658,7 +1672,7 @@ app.post('/api/safety/checklists/:id/toggle', requireApiKey, async (req, res) =>
 // -------------------------------------------------------------
 app.post('/api/sync', requireApiKey, async (req, res) => {
   await initPgTables();
-  if (isVercel && (!pgPool || !tablesInitialized)) {
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
     return res.status(503).json({ success: false, error: "Persistent POS sync storage is unavailable." });
   }
   const db = pgPool ? null : loadFileData();
@@ -1700,7 +1714,7 @@ app.post('/api/sync', requireApiKey, async (req, res) => {
 
       // PostgreSQL Production: receipt, recipe stock depletion and KDS tickets
       // commit together. A failure leaves the event unacknowledged for safe retry.
-      if (isVercel && !pgPool) {
+      if (isProductionRuntime && !pgPool) {
         return res.status(503).json({
           success: false,
           error: "Persistent POS storage is unavailable; receipt was not acknowledged.",
@@ -1788,7 +1802,7 @@ async function listReceiptsForApi() {
       items: typeof row.items === "string" ? JSON.parse(row.items) : (row.items || [])
     }));
   }
-  if (isVercel) throw new Error("Persistent receipt storage is unavailable.");
+  if (isProductionRuntime) throw new Error("Persistent receipt storage is unavailable.");
   const db = loadFileData();
   return [...(db.receipts || [])].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 }
@@ -1835,7 +1849,7 @@ app.get('/api/export/items', async (req, res) => {
   let items;
   try {
     if (pgPool) items = await listPgItems();
-    else if (isVercel) return res.status(503).json({ error: "Persistent catalog export is unavailable." });
+    else if (isProductionRuntime) return res.status(503).json({ error: "Persistent catalog export is unavailable." });
     else items = loadFileData().items || [];
   } catch (error) {
     console.error("[Catalog] Item export failed:", error.message);

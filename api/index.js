@@ -605,11 +605,12 @@ function logAudit(action, details, req) {
 // -------------------------------------------------------------
 // RESTAURANT CORE: Automatic Recipe Depletion & KDS Dispatcher
 // -------------------------------------------------------------
-function processRecipeDepletionAndKDS(order, db) {
+function processRecipeDepletionAndKDS(order, db, options = {}) {
   if (!order || !Array.isArray(order.items)) return;
 
-  // 1. Raw Ingredient Depletion
-  order.items.forEach(orderItem => {
+  // 1. Raw Ingredient Depletion. Public online orders are not paid/accepted yet,
+  // so they must not consume stock until staff confirms the order.
+  if (options.depleteInventory !== false) order.items.forEach(orderItem => {
     const itemId = orderItem.itemId || orderItem.id;
     const orderQty = Number(orderItem.quantity || orderItem.qty || 1);
     const recipe = db.recipes.find(r => r.itemId === itemId || r.itemName === orderItem.name);
@@ -1142,7 +1143,7 @@ app.post('/api/online-orders', async (req, res) => {
     tableNumber: order.tableNumber || (order.deliveryType === 'DINE_IN' ? `Table ${order.tableNumber}` : order.deliveryType),
     customerName: `${order.customerName} (${order.customerPhone})`,
     items: order.items
-  }, db);
+  }, db, { depleteInventory: false });
 
   saveFileData(db);
   logAudit("ONLINE_ORDER_PLACED", { orderNumber, total, customer: order.customerName }, req);

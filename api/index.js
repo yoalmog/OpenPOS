@@ -9,6 +9,7 @@ const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
 const { ensureOperationalTables, getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
 const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
 const { validateSyncEvent } = require('./lib/sync-validation');
+const { listShifts, getOpenShift, startShift, closeShift } = require('./lib/shift-repository');
 
 const app = express();
 
@@ -1528,6 +1529,101 @@ app.post('/api/waste', requireApiKey, async (req, res) => {
     console.error("[Audit] Waste log audit write failed:", error.message);
   }
   return res.json({ success: true, wasteEntry });
+});
+
+// -------------------------------------------------------------
+// Shift management — PostgreSQL is authoritative in production
+// -------------------------------------------------------------
+app.get('/api/shifts', async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  try {
+    const shifts = pgPool
+      ? await listShifts(pgPool, { openOnly: req.query.openOnly === "true", limit: req.query.limit })
+      : (loadFileData().shifts || []);
+    return res.json(shifts);
+  } catch (error) {
+    console.error("[Shifts] List failed:", error.message);
+    return res.status(503).json({ error: "Shifts are temporarily unavailable." });
+  }
+});
+
+app.get('/api/shifts/current', async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  try {
+    const employeeName = typeof req.query.employeeName === "string" ? req.query.employeeName.trim() : null;
+    const shift = pgPool
+      ? await getOpenShift(pgPool, employeeName)
+      : (loadFileData().shifts || []).find(item => item.isOpen && (!employeeName || item.employeeName === employeeName)) || null;
+    return res.json({ shift });
+  } catch (error) {
+    console.error("[Shifts] Current shift lookup failed:", error.message);
+    return res.status(503).json({ error: "Current shift is temporarily unavailable." });
+  }
+});
+
+app.post('/api/shifts/start', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  const { employeeName, startingCash } = req.body || {};
+  if (!String(employeeName || "").trim() || !Number.isFinite(Number(startingCash)) || Number(startingCash) < 0) {
+    return res.status(400).json({ error: "A valid employeeName and non-negative startingCash are required." });
+  }
+  try {
+    if (pgPool) {
+      const existing = await getOpenShift(pgPool, String(employeeName).trim());
+      if (existing) return res.status(409).json({ error: "This employee already has an open shift.", shift: existing });
+      const shift = await startShift(pgPool, {
+        id: `shift_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        employeeName, startingCash, startTime: Date.now()
+      });
+      await logAudit("SHIFT_STARTED", { shiftId: shift.id, employeeName: shift.employeeName }, req);
+      return res.status(201).json({ success: true, shift });
+    }
+    const db = loadFileData();
+    db.shifts = db.shifts || [];
+    if (db.shifts.some(item => item.isOpen && item.employeeName === String(employeeName).trim())) {
+      return res.status(409).json({ error: "This employee already has an open shift." });
+    }
+    const shift = { id: `shift_${Date.now()}`, employeeName: String(employeeName).trim(), startTime: Date.now(), endTime: null, startingCash: Number(startingCash), cashPayments: 0, cardPayments: 0, totalRefunds: 0, actualClosingCash: null, isOpen: true };
+    db.shifts.unshift(shift);
+    saveFileData(db);
+    return res.status(201).json({ success: true, shift });
+  } catch (error) {
+    console.error("[Shifts] Start failed:", error.message);
+    return res.status(503).json({ error: "Shift could not be started." });
+  }
+});
+
+app.post('/api/shifts/:id/close', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (!pgPool && isProductionRuntime) return res.status(503).json({ error: "Persistent shift storage is unavailable." });
+  const actualClosingCash = Number(req.body?.actualClosingCash);
+  if (!Number.isFinite(actualClosingCash) || actualClosingCash < 0) {
+    return res.status(400).json({ error: "A non-negative actualClosingCash is required." });
+  }
+  try {
+    let shift;
+    if (pgPool) {
+      shift = await closeShift(pgPool, { id: req.params.id, endTime: Date.now(), actualClosingCash });
+      if (!shift) return res.status(404).json({ error: "Open shift not found." });
+      await logAudit("SHIFT_CLOSED", { shiftId: shift.id, employeeName: shift.employeeName, actualClosingCash }, req);
+    } else {
+      const db = loadFileData();
+      const record = (db.shifts || []).find(item => item.id === req.params.id && item.isOpen);
+      if (!record) return res.status(404).json({ error: "Open shift not found." });
+      record.endTime = Date.now();
+      record.actualClosingCash = actualClosingCash;
+      record.isOpen = false;
+      saveFileData(db);
+      shift = record;
+    }
+    return res.json({ success: true, shift });
+  } catch (error) {
+    console.error("[Shifts] Close failed:", error.message);
+    return res.status(503).json({ error: "Shift could not be closed." });
+  }
 });
 
 // -------------------------------------------------------------

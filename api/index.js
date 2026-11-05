@@ -1054,17 +1054,17 @@ app.get('/api/recipes/profitability', async (req, res) => {
 // 6. Kitchen Display System (KDS) & Routing Stations API
 // -------------------------------------------------------------
 app.get('/api/kitchen/tickets', async (req, res) => {
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
+  if (pgPool) {
+    try { return res.json(await listKitchenTickets(pgPool, req.query)); }
+    catch (error) { console.error("[DB] KDS ticket read failed:", error.message); return res.status(503).json({ error: "Could not read persistent kitchen tickets." }); }
+  }
   const db = loadFileData();
   let tickets = db.kitchenOrders || [];
   const { station, status } = req.query;
-
-  if (station && station !== 'ALL') {
-    tickets = tickets.filter(t => t.station === station);
-  }
-  if (status) {
-    tickets = tickets.filter(t => t.status === status);
-  }
-
+  if (station && station !== 'ALL') tickets = tickets.filter(t => t.station === station);
+  if (status) tickets = tickets.filter(t => t.status === status);
   res.json(tickets);
 });
 

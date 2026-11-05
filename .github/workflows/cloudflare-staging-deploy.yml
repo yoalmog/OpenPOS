@@ -94,10 +94,15 @@ jobs:
             process.stdin.on("data", chunk => body += chunk);
             process.stdin.on("end", () => {
               const result = JSON.parse(body);
-              if (result.status !== "ok" || result.expressStatus !== 401) {
+              if (
+                result.status !== "ok" ||
+                result.databaseConnected !== true ||
+                result.supabaseConfigured !== true ||
+                result.unauthenticatedStatus !== 401
+              ) {
                 console.error("Express API readiness probe failed:", result);
                 process.exit(1);
               }
-              console.log("OpenPOS Express API is responding and rejects unauthenticated requests.");
+              console.log("OpenPOS API pool, Supabase configuration, and auth boundary verified.");
             });
           '

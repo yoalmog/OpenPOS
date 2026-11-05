@@ -2,6 +2,15 @@ name: Deploy OpenPOS Cloudflare staging
 
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/cloudflare-workers-hyperdrive]
+    paths:
+      - "cloudflare/**"
+      - "api/**"
+      - "wrangler.jsonc"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/cloudflare-staging-deploy.yml"
 
 permissions:
   contents: read

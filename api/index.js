@@ -839,38 +839,111 @@ app.get('/api/stats', async (req, res) => {
   });
 });
 
+// PostgreSQL catalog repository helpers. API responses retain the existing camelCase contract.
+async function listPgCategories() {
+  const result = await pgPool.query('SELECT id, name, color FROM categories ORDER BY name');
+  return result.rows.map(row => ({ id: row.id, name: row.name, color: Number(row.color) }));
+}
+
+async function savePgCategory(category) {
+  await pgPool.query(
+    `INSERT INTO categories (id, name, color, updated_at) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, color = EXCLUDED.color, updated_at = EXCLUDED.updated_at`,
+    [category.id, category.name, category.color, Date.now()]
+  );
+}
+
+async function listPgItems() {
+  const result = await pgPool.query(
+    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes FROM items ORDER BY name'
+  );
+  return result.rows.map(row => ({
+    id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
+    barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
+    stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
+    prepTimeMinutes: Number(row.prep_time_minutes || 5)
+  }));
+}
+
+async function savePgItem(item) {
+  await pgPool.query(
+    `INSERT INTO items
+      (id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (id) DO UPDATE SET
+      name=EXCLUDED.name, price=EXCLUDED.price, category_id=EXCLUDED.category_id,
+      barcode=EXCLUDED.barcode, color=EXCLUDED.color, stock_quantity=EXCLUDED.stock_quantity,
+      station=EXCLUDED.station, prep_time_minutes=EXCLUDED.prep_time_minutes, updated_at=EXCLUDED.updated_at`,
+    [item.id, item.name, item.price, item.categoryId, item.barcode, item.color,
+      item.stockQuantity, item.station, item.prepTimeMinutes, Date.now()]
+  );
+}
+
+async function deletePgItem(id) {
+  await pgPool.query('DELETE FROM items WHERE id = $1', [id]);
+}
+
 // -------------------------------------------------------------
 // 3. Catalog Items & Categories API
 // -------------------------------------------------------------
 app.get('/api/categories', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.categories || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  try {
+    if (pgPool) return res.json(await listPgCategories());
+    const db = loadFileData();
+    return res.json(db.categories || []);
+  } catch (error) {
+    console.error("[DB] Category read failed:", error.message);
+    return res.status(503).json({ error: "Could not read persistent categories." });
+  }
 });
 
 app.post('/api/categories', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
   const { name, color } = req.body;
-  if (!name) return res.status(400).json({ error: "Category name is required." });
+  if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "Category name is required." });
   const newCat = {
     id: `cat_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
     name: name.trim(),
     color: Number(color) || -16744448
   };
-  db.categories.push(newCat);
-  saveFileData(db);
-  res.json({ success: true, category: newCat });
+  try {
+    if (pgPool) await savePgCategory(newCat);
+    else {
+      const db = loadFileData();
+      db.categories = db.categories || [];
+      db.categories.push(newCat);
+      saveFileData(db);
+    }
+    return res.json({ success: true, category: newCat });
+  } catch (error) {
+    console.error("[DB] Category save failed:", error.message);
+    return res.status(503).json({ error: "Category could not be saved persistently." });
+  }
 });
 
 app.get('/api/items', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.items || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  try {
+    if (pgPool) return res.json(await listPgItems());
+    const db = loadFileData();
+    return res.json(db.items || []);
+  } catch (error) {
+    console.error("[DB] Item read failed:", error.message);
+    return res.status(503).json({ error: "Could not read persistent items." });
+  }
 });
 
 app.post('/api/items', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  const item = req.body;
-  if (!item.name || item.price === undefined) {
-    return res.status(400).json({ error: "Name and price are required." });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  const item = req.body || {};
+  if (!item.name || typeof item.name !== "string" || !item.name.trim() ||
+      item.price === undefined || !Number.isFinite(Number(item.price)) || Number(item.price) < 0) {
+    return res.status(400).json({ error: "A valid item name and non-negative price are required." });
   }
 
   const formattedItem = {
@@ -880,24 +953,43 @@ app.post('/api/items', requireApiKey, async (req, res) => {
     categoryId: item.categoryId || "general",
     barcode: item.barcode || "",
     color: Number(item.color) || -16744448,
-    stockQuantity: Number(item.stockQuantity) || 100,
+    stockQuantity: Number.isFinite(Number(item.stockQuantity)) ? Number(item.stockQuantity) : 100,
     station: item.station || "HOT_KITCHEN",
     prepTimeMinutes: Number(item.prepTimeMinutes) || 5
   };
 
-  const existingIdx = db.items.findIndex(i => i.id === formattedItem.id);
-  if (existingIdx >= 0) db.items[existingIdx] = formattedItem;
-  else db.items.push(formattedItem);
-
-  saveFileData(db);
-  res.json({ success: true, item: formattedItem });
+  try {
+    if (pgPool) await savePgItem(formattedItem);
+    else {
+      const db = loadFileData();
+      db.items = db.items || [];
+      const existingIdx = db.items.findIndex(i => i.id === formattedItem.id);
+      if (existingIdx >= 0) db.items[existingIdx] = formattedItem;
+      else db.items.push(formattedItem);
+      saveFileData(db);
+    }
+    return res.json({ success: true, item: formattedItem });
+  } catch (error) {
+    console.error("[DB] Item save failed:", error.message);
+    return res.status(503).json({ error: "Item could not be saved persistently." });
+  }
 });
 
 app.delete('/api/items/:id', requireApiKey, async (req, res) => {
-  const db = loadFileData();
-  db.items = db.items.filter(i => i.id !== req.params.id);
-  saveFileData(db);
-  res.json({ success: true });
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  try {
+    if (pgPool) await deletePgItem(req.params.id);
+    else {
+      const db = loadFileData();
+      db.items = (db.items || []).filter(i => i.id !== req.params.id);
+      saveFileData(db);
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("[DB] Item delete failed:", error.message);
+    return res.status(503).json({ error: "Item could not be deleted from persistent storage." });
+  }
 });
 
 // -------------------------------------------------------------

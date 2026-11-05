@@ -66,7 +66,6 @@ class MainActivity : ComponentActivity() {
                 authManager = authManager,
                 initialApiBaseUrl = repository.settings.value.syncServerUrl,
                 onServerUrlChanged = { serverUrl ->
-                  authManager.apiBaseUrl = serverUrl
                   repository.updateSettings(repository.settings.value.copy(syncServerUrl = serverUrl))
                 },
                 onAuthenticated = {

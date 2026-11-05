@@ -516,7 +516,7 @@ async function requireSupabaseAuth(req, res, next, accessToken) {
 // Choose the verifier by JWT issuer; never trust a client-supplied role.
 async function requireApiAuth(req, res, next) {
   const authorization = req.headers.authorization || "";
-  const match = authorization.match(/^Bearer\\s+(.+)$/i);
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
   if (!match) {
     return res.status(401).json({ error: "Unauthorized", message: "A Firebase or Supabase access token is required." });
   }

@@ -2,7 +2,6 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
-  alias(libs.plugins.google.services)
 }
 
 android {
@@ -48,14 +47,6 @@ dependencies {
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
-
-  // Firebase Authentication and Google Credential Manager
-  implementation(platform(libs.firebase.bom))
-  implementation(libs.firebase.auth)
-  implementation(libs.androidx.credentials)
-  implementation(libs.androidx.credentials.play.services.auth)
-  implementation(libs.google.identity.googleid)
-  implementation(libs.kotlinx.coroutines.play.services)
 
   // Core Android dependencies
   implementation(libs.androidx.core.ktx)

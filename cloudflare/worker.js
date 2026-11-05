@@ -39,7 +39,7 @@ export default {
         const connectionString = workerEnv.HYPERDRIVE?.connectionString;
         if (connectionString) app.configureDatabase(connectionString);
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
-        const response = await expressHandler(probe);
+        const response = await expressHandler.fetch(probe);
         return Response.json({
           status: response.status === 401 ? "ok" : "unexpected",
           expressStatus: response.status
@@ -107,6 +107,6 @@ export default {
 
     const connectionString = workerEnv.HYPERDRIVE?.connectionString;
     if (connectionString) app.configureDatabase(connectionString);
-    return expressHandler(request);
+    return expressHandler.fetch(request);
   }
 };

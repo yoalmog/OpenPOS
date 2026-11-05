@@ -13,10 +13,13 @@ const { listShifts, getOpenShift, startShift, closeShift } = require('./lib/shif
 
 const app = express();
 
-// Supabase is the sole API identity provider. Missing configuration fails closed.
+// Firebase authenticates Android POS clients; Supabase remains supported for existing clients.
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "";
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "";
+const OPENPOS_OWNER_EMAIL = (process.env.OPENPOS_OWNER_EMAIL || "yoalmog@gmail.com").trim().toLowerCase();
 
 // Production runtimes must never use ephemeral/local files as business storage.
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -440,36 +443,69 @@ async function initPgTables() {
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Public bootstrap endpoint: only the Supabase project URL and anon key are exposed.
+// Public bootstrap endpoint for Firebase Android and legacy Supabase clients.
 app.get("/api/auth-config", (req, res) => {
   res.set("Cache-Control", "no-store");
+  const firebaseConfigured = Boolean(FIREBASE_PROJECT_ID && FIREBASE_API_KEY);
+  const supabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
   res.json({
-    configured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
+    configured: firebaseConfigured || supabaseConfigured,
+    provider: firebaseConfigured ? "firebase" : "supabase",
+    firebaseConfigured,
+    firebaseProjectId: FIREBASE_PROJECT_ID,
+    supabaseConfigured,
     supabaseUrl: SUPABASE_URL,
     supabaseAnonKey: SUPABASE_ANON_KEY
   });
 });
 
-// Validate every API request against Supabase Auth. Never trust a client-supplied role.
-async function requireSupabaseAuth(req, res, next) {
-  const authorization = req.headers.authorization || "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    return res.status(401).json({ error: "Unauthorized", message: "A Supabase access token is required." });
+async function requireFirebaseAuth(req, res, next, idToken) {
+  if (!FIREBASE_PROJECT_ID || !FIREBASE_API_KEY) {
+    return res.status(503).json({ error: "Authentication unavailable", message: "Firebase server authentication is not configured." });
   }
+  try {
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(FIREBASE_API_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ idToken })
+    });
+    if (!response.ok) {
+      return res.status(401).json({ error: "Unauthorized", message: "The Firebase session is invalid or expired." });
+    }
+    const payload = await response.json();
+    const user = payload.users && payload.users[0];
+    if (!user || !user.localId || !user.email || user.emailVerified !== true) {
+      return res.status(401).json({ error: "Unauthorized", message: "A verified Firebase account is required." });
+    }
+    req.authUser = {
+      id: user.localId,
+      email: user.email,
+      email_verified: user.emailVerified,
+      app_metadata: { role: user.email.toLowerCase() === OPENPOS_OWNER_EMAIL ? "owner" : "user" },
+      authProvider: "firebase"
+    };
+    return next();
+  } catch (error) {
+    console.error("[AUTH] Firebase ID token verification failed:", error.message);
+    return res.status(503).json({ error: "Authentication unavailable", message: "Could not verify the Firebase session." });
+  }
+}
+
+// Preserve Supabase authentication for existing Back Office clients.
+async function requireSupabaseAuth(req, res, next, accessToken) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.error("[AUTH] Supabase server configuration is missing.");
     return res.status(503).json({ error: "Authentication unavailable", message: "Server authentication is not configured." });
   }
   try {
     const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
       method: "GET",
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${match[1]}` }
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` }
     });
     if (!response.ok) {
       return res.status(401).json({ error: "Unauthorized", message: "The Supabase session is invalid or expired." });
     }
     req.authUser = await response.json();
+    req.authUser.authProvider = "supabase";
     return next();
   } catch (error) {
     console.error("[AUTH] Supabase user verification failed:", error.message);
@@ -477,9 +513,33 @@ async function requireSupabaseAuth(req, res, next) {
   }
 }
 
+// Choose the verifier by JWT issuer; never trust a client-supplied role.
+async function requireApiAuth(req, res, next) {
+  const authorization = req.headers.authorization || "";
+  const match = authorization.match(/^Bearer\\s+(.+)$/i);
+  if (!match) {
+    return res.status(401).json({ error: "Unauthorized", message: "A Firebase or Supabase access token is required." });
+  }
+  const token = match[1];
+  let issuer = "";
+  try {
+    const payloadPart = token.split(".")[1];
+    if (payloadPart) {
+      const normalized = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+      issuer = JSON.parse(Buffer.from(normalized, "base64").toString("utf8")).iss || "";
+    }
+  } catch (_) {}
+  if (FIREBASE_PROJECT_ID && issuer === `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) {
+    return requireFirebaseAuth(req, res, next, token);
+  }
+  return requireSupabaseAuth(req, res, next, token);
+}
+
 function hasAdminRole(user) {
   const role = user && user.app_metadata && user.app_metadata.role;
+  const ownerEmail = user && typeof user.email === "string" && user.email.toLowerCase() === OPENPOS_OWNER_EMAIL;
   return Boolean(user && (
+    ownerEmail ||
     (OPENPOS_OWNER_USER_ID && user.id === OPENPOS_OWNER_USER_ID) ||
     role === "owner" ||
     role === "admin"
@@ -500,7 +560,7 @@ function isPublicStorefrontRequest(req) {
 
 app.use("/api", (req, res, next) => {
   if (isPublicStorefrontRequest(req)) return next();
-  return requireSupabaseAuth(req, res, (error) => {
+  return requireApiAuth(req, res, (error) => {
     if (error) return next(error);
     // Until employee permissions are implemented, authenticated API access is owner/admin only.
     // This prevents ordinary authenticated accounts from reaching routes that lack local role checks.

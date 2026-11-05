@@ -19,11 +19,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
-import com.example.openpos.auth.SupabaseAuthManager
+import com.example.openpos.auth.FirebaseAuthManager
 import com.example.openpos.data.PosRepository
 import com.example.openpos.i18n.LocalizationManager
 import com.example.openpos.theme.OpenPOSTheme
-import com.example.openpos.ui.auth.SupabaseLoginScreen
+import com.example.openpos.ui.auth.FirebaseLoginScreen
 import com.example.openpos.ui.pos.PosScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,8 +34,8 @@ class MainActivity : ComponentActivity() {
 
     LocalizationManager.init(this)
     val repository = PosRepository.getInstance(this)
-    val authManager = SupabaseAuthManager(this, repository.settings.value.syncServerUrl)
-    repository.syncManager?.accessTokenProvider = authManager::getValidAccessToken
+    val authManager = FirebaseAuthManager()
+    repository.syncManager?.accessTokenProvider = authManager::getValidIdToken
 
     enableEdgeToEdge()
     setContent {
@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
 
       LaunchedEffect(authManager) {
         authenticated = withContext(Dispatchers.IO) {
-          authManager.getValidAccessToken() != null
+          authManager.getValidIdToken() != null
         }
         authChecked = true
       }
@@ -61,7 +61,8 @@ class MainActivity : ComponentActivity() {
                 CircularProgressIndicator()
               }
               authenticated -> PosScreen(repository = repository)
-              else -> SupabaseLoginScreen(
+              else -> FirebaseLoginScreen(
+                activity = this@MainActivity,
                 authManager = authManager,
                 initialApiBaseUrl = repository.settings.value.syncServerUrl,
                 onServerUrlChanged = { serverUrl ->

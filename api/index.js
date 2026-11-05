@@ -7,6 +7,7 @@ const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, sav
 const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
 const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
 const { ensureOperationalTables, getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
+const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
 
 const app = express();
 
@@ -817,81 +818,75 @@ app.post('/api/store', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/stats', async (req, res) => {
   await initPgTables();
-  const db = loadFileData();
-  let receipts = db.receipts || [];
   const period = req.query.period || 'all';
   const now = new Date();
-
-  if (req.query.from && req.query.to) {
-    const fromTs = Number(req.query.from);
-    const toTs = Number(req.query.to);
-    receipts = receipts.filter(r => r.timestamp >= fromTs && r.timestamp <= toTs);
+  let fromTs;
+  let toTs;
+  if (req.query.from !== undefined || req.query.to !== undefined) {
+    fromTs = Number(req.query.from);
+    toTs = Number(req.query.to);
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs > toTs) {
+      return res.status(400).json({ error: "A valid from/to timestamp range is required." });
+    }
   } else if (period === 'today') {
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfDay);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   } else if (period === 'yesterday') {
-    const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
-    const endOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - 1;
-    receipts = receipts.filter(r => r.timestamp >= startOfYesterday && r.timestamp <= endOfYesterday);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+    toTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - 1;
   } else if (period === 'week') {
-    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfWeek);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
   } else if (period === 'month') {
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    receipts = receipts.filter(r => r.timestamp >= startOfMonth);
+    fromTs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }
+  let receipts;
+  try {
+    if (pgPool) receipts = await listReceipts(pgPool, { from: fromTs, to: toTs });
+    else if (isVercel) return res.status(503).json({ error: "Persistent analytics data is unavailable." });
+    else {
+      receipts = (loadFileData().receipts || []).filter(receipt =>
+        (fromTs === undefined || receipt.timestamp >= fromTs) &&
+        (toTs === undefined || receipt.timestamp <= toTs)
+      );
+    }
+  } catch (error) {
+    console.error("[Analytics] Receipt query failed:", error.message);
+    return res.status(503).json({ error: "Sales analytics are temporarily unavailable." });
   }
 
-  const getReceiptTotal = r => Number(r.grandTotal !== undefined ? r.grandTotal : (r.total !== undefined ? r.total : (r.totalAmount || 0)));
-  const totalRevenue = receipts.reduce((sum, r) => sum + getReceiptTotal(r), 0);
+  const getReceiptTotal = receipt => Number(receipt.grandTotal !== undefined ? receipt.grandTotal : (receipt.total !== undefined ? receipt.total : (receipt.totalAmount || 0)));
+  const totalRevenue = receipts.reduce((sum, receipt) => sum + getReceiptTotal(receipt), 0);
   const totalOrders = receipts.length;
-  const averageTicket = totalOrders > 0 ? (totalRevenue / totalOrders) : 0;
-
-  let cashSales = 0;
-  let cardSales = 0;
-  let refundTotal = 0;
-
-  receipts.forEach(r => {
-    const rTot = getReceiptTotal(r);
-    if (r.isRefund) refundTotal += Math.abs(rTot);
-    if (Array.isArray(r.payments) && r.payments.length > 0) {
-      r.payments.forEach(p => {
-        const amt = Number(p.amount) || 0;
-        if (p.type === 'CASH' || p.type === 'מזומן') cashSales += amt;
-        else if (p.type === 'CARD' || p.type === 'אשראי') cardSales += amt;
-        else cashSales += amt;
+  const averageTicket = totalOrders ? totalRevenue / totalOrders : 0;
+  let cashSales = 0, cardSales = 0, refundTotal = 0;
+  receipts.forEach(receipt => {
+    const total = getReceiptTotal(receipt);
+    if (receipt.isRefund) refundTotal += Math.abs(total);
+    if (Array.isArray(receipt.payments) && receipt.payments.length) {
+      receipt.payments.forEach(payment => {
+        const amount = Number(payment.amount) || 0;
+        if (payment.type === 'CASH' || payment.type === 'מזומן') cashSales += amount;
+        else if (payment.type === 'CARD' || payment.type === 'אשראי') cardSales += amount;
+        else cashSales += amount;
       });
-    } else {
-      cashSales += rTot;
-    }
+    } else cashSales += total;
   });
-
   const hourlySales = {};
-  for (let i = 0; i < 24; i++) {
-    hourlySales[`${String(i).padStart(2, '0')}:00`] = 0;
-  }
-  receipts.forEach(r => {
-    const d = new Date(r.timestamp);
-    const h = `${String(d.getHours()).padStart(2, '0')}:00`;
-    if (hourlySales[h] !== undefined) hourlySales[h] += getReceiptTotal(r);
+  for (let hour = 0; hour < 24; hour++) hourlySales[`${String(hour).padStart(2, '0')}:00`] = 0;
+  receipts.forEach(receipt => {
+    const hour = `${String(new Date(receipt.timestamp).getHours()).padStart(2, '0')}:00`;
+    hourlySales[hour] += getReceiptTotal(receipt);
   });
-
   const productSalesCount = {};
-  receipts.forEach(r => {
-    if (Array.isArray(r.items)) {
-      r.items.forEach(ci => {
-        const name = ci.name || ci.itemName || (ci.item && ci.item.name) || "Item";
-        const qty = Number(ci.quantity !== undefined ? ci.quantity : (ci.qty || 1));
-        productSalesCount[name] = (productSalesCount[name] || 0) + qty;
-      });
-    }
-  });
-
+  receipts.forEach(receipt => (Array.isArray(receipt.items) ? receipt.items : []).forEach(line => {
+    const name = line.name || line.itemName || line.item?.name || "Item";
+    const quantity = Number(line.quantity !== undefined ? line.quantity : (line.qty || 1));
+    productSalesCount[name] = (productSalesCount[name] || 0) + quantity;
+  }));
   const topSelling = Object.entries(productSalesCount)
     .map(([name, qty]) => ({ name, qty }))
-    .sort((a, b) => b.qty - a.qty)
+    .sort((left, right) => right.qty - left.qty)
     .slice(0, 6);
-
-  res.json({
+  return res.json({
     filterPeriod: period,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     totalOrders,
@@ -1524,54 +1519,44 @@ app.post('/api/waste', requireApiKey, async (req, res) => {
 // 9. Smart Staffing & Shift Demand Forecast API
 // -------------------------------------------------------------
 app.get('/api/forecast', async (req, res) => {
-  const db = loadFileData();
-  const receipts = db.receipts || [];
+  await initPgTables();
   const now = new Date();
-
-  // Hourly order density estimation
-  const hourlyCount = {};
-  for (let h = 7; h <= 22; h++) {
-    hourlyCount[`${String(h).padStart(2, '0')}:00`] = 0;
-  }
-
-  receipts.forEach(r => {
-    const d = new Date(r.timestamp);
-    const hStr = `${String(d.getHours()).padStart(2, '0')}:00`;
-    if (hourlyCount[hStr] !== undefined) hourlyCount[hStr]++;
-  });
-
-  const hourlyForecast = Object.entries(hourlyCount).map(([hour, count]) => {
-    const predictedOrders = Math.max(count * 2, Math.floor(8 + Math.random() * 12));
-    let baristas = 1;
-    let kitchenCooks = 1;
-    let floorStaff = 1;
-
-    if (predictedOrders > 25) {
-      baristas = 3;
-      kitchenCooks = 2;
-      floorStaff = 3;
-    } else if (predictedOrders > 15) {
-      baristas = 2;
-      kitchenCooks = 2;
-      floorStaff = 2;
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  const since = now.getTime() - sevenDays;
+  let hourlyCounts = Array(24).fill(0);
+  try {
+    if (pgPool) {
+      const observed = await getHourlyReceiptCounts(pgPool, since);
+      observed.forEach(row => { if (row.hour >= 0 && row.hour < 24) hourlyCounts[row.hour] = row.orders; });
+    } else if (isVercel) {
+      return res.status(503).json({ error: "Persistent forecast data is unavailable." });
+    } else {
+      (loadFileData().receipts || []).filter(receipt => Number(receipt.timestamp) >= since && !receipt.isRefund)
+        .forEach(receipt => { const hour = new Date(receipt.timestamp).getHours(); hourlyCounts[hour]++; });
     }
-
-    return {
-      hour,
+  } catch (error) {
+    console.error("[Forecast] Receipt history query failed:", error.message);
+    return res.status(503).json({ error: "Forecast data is temporarily unavailable." });
+  }
+  const hourlyForecast = [];
+  for (let hour = 7; hour <= 22; hour++) {
+    const predictedOrders = Math.round(hourlyCounts[hour] / 7);
+    let baristas = 0, kitchenCooks = 0, floorStaff = 0;
+    if (predictedOrders > 25) { baristas = 3; kitchenCooks = 2; floorStaff = 3; }
+    else if (predictedOrders > 15) { baristas = 2; kitchenCooks = 2; floorStaff = 2; }
+    else if (predictedOrders > 0) { baristas = 1; kitchenCooks = 1; floorStaff = 1; }
+    hourlyForecast.push({
+      hour: `${String(hour).padStart(2, '0')}:00`,
       predictedOrders,
-      recommendedStaff: {
-        total: baristas + kitchenCooks + floorStaff,
-        baristas,
-        kitchenCooks,
-        floorStaff
-      }
-    };
-  });
-
-  res.json({
+      recommendedStaff: { total: baristas + kitchenCooks + floorStaff, baristas, kitchenCooks, floorStaff }
+    });
+  }
+  const peak = hourlyForecast.reduce((best, current) => current.predictedOrders > best.predictedOrders ? current : best, hourlyForecast[0]);
+  return res.json({
     day: now.toLocaleDateString(undefined, { weekday: 'long' }),
-    totalPredictedOrders: hourlyForecast.reduce((s, h) => s + h.predictedOrders, 0),
-    peakHour: "12:00",
+    historicalWindowDays: 7,
+    totalPredictedOrders: hourlyForecast.reduce((sum, hour) => sum + hour.predictedOrders, 0),
+    peakHour: peak?.predictedOrders > 0 ? peak.hour : null,
     hourlyForecast
   });
 });
@@ -1836,17 +1821,29 @@ app.get('/api/export/receipts', async (req, res) => {
 });
 
 app.get('/api/export/items', async (req, res) => {
-  const db = loadFileData();
-  const items = db.items || [];
-  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\n";
-
-  items.forEach(i => {
-    csv += `"${i.id}","${i.name}",${i.price},"${i.categoryId || ''}","${i.barcode || ''}",${i.stockQuantity || 0},"${i.station || 'HOT_KITCHEN'}",${i.prepTimeMinutes || 5}\n`;
+  await initPgTables();
+  let items;
+  try {
+    if (pgPool) items = await listPgItems();
+    else if (isVercel) return res.status(503).json({ error: "Persistent catalog export is unavailable." });
+    else items = loadFileData().items || [];
+  } catch (error) {
+    console.error("[Catalog] Item export failed:", error.message);
+    return res.status(503).json({ error: "Catalog export is temporarily unavailable." });
+  }
+  const csvEscape = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\\n";
+  items.forEach(item => {
+    csv += [
+      csvEscape(item.id), csvEscape(item.name), Number(item.price) || 0,
+      csvEscape(item.categoryId || ""), csvEscape(item.barcode || ""),
+      Number(item.stockQuantity) || 0, csvEscape(item.station || ""),
+      Number(item.prepTimeMinutes) || 0
+    ].join(",") + "\\n";
   });
-
-  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="openpos_catalog_export.csv"');
-  res.send(csv);
+  return res.send(csv);
 });
 
 // -------------------------------------------------------------

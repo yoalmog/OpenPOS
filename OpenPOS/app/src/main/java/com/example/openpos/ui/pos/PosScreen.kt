@@ -1878,7 +1878,6 @@ fun SettingsDialog(
     var taxRate by remember { mutableStateOf(settings.taxRatePercent.toString()) }
     var currencySymbol by remember { mutableStateOf(settings.currencySymbol) }
     var syncUrl by remember { mutableStateOf(settings.syncServerUrl) }
-    var apiKey by remember { mutableStateOf(settings.apiKey) }
     var managerPin by remember { mutableStateOf(settings.managerPin) }
     var cashierName by remember { mutableStateOf(settings.cashierName) }
     var receiptFooter by remember { mutableStateOf(settings.receiptFooter) }
@@ -2008,17 +2007,6 @@ fun SettingsDialog(
 
                 item {
                     OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = { apiKey = it },
-                        label = { Text("Cloud API Security Key (x-api-key)") },
-                        leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
-
-                item {
-                    OutlinedTextField(
                         value = managerPin,
                         onValueChange = { managerPin = it },
                         label = { Text("Manager PIN (for reset & admin actions)") },
@@ -2130,7 +2118,6 @@ fun SettingsDialog(
                             syncServerUrl = syncUrl.trim(),
                             cashierName = cashierName.ifBlank { "Cashier" },
                             receiptFooter = receiptFooter,
-                            apiKey = apiKey.trim(),
                             managerPin = managerPin.trim()
                         )
                     )

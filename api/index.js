@@ -1131,27 +1131,8 @@ app.post('/api/online-orders', async (req, res) => {
 
   db.onlineOrders.unshift(order);
 
-  // Auto-generate formal Receipt for transaction log
-  const receipt = {
-    id: `REC-${now}`,
-    timestamp: now,
-    subtotal,
-    taxRate: db.storeInfo.taxRate / 100,
-    taxAmount: tax,
-    grandTotal: total,
-    employeeName: "Web Ordering Portal",
-    customerName: order.customerName,
-    ticketNote: `Online [${order.deliveryType}] - ${order.customerPhone}`,
-    isRefund: false,
-    payments: [{ type: "CARD", amount: total }],
-    items: orderItems.map(i => ({
-      name: i.name,
-      quantity: i.quantity,
-      unitPrice: i.price,
-      totalPrice: i.price * i.quantity
-    }))
-  };
-  db.receipts.unshift(receipt);
+  // An unpaid web order is not a completed sale: do not create a receipt
+  // or record CARD revenue until a payment provider confirms settlement.
 
   // Automatic ingredient depletion and KDS Station routing!
   processRecipeDepletionAndKDS({

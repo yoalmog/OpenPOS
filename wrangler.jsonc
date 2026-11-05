@@ -31,7 +31,8 @@
       "/order/",
       "/kitchen",
       "/kitchen/"
-    ]
+    ],
+    "html_handling": "none"
   },
   "vars": {
     "SERVICE_NAME": "openpos-cloudflare-staging"

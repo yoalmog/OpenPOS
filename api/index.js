@@ -311,7 +311,10 @@ function configureDatabase(connectionString) {
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
       max: 10,
-      idleTimeoutMillis: 30000
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+      query_timeout: 10000,
+      statement_timeout: 10000
     });
 
     // Supabase transaction poolers can reset session state between transactions.
@@ -329,7 +332,7 @@ function configureDatabase(connectionString) {
             params = undefined;
           }
           const sql = typeof query === "string" ? query : query?.text || "";
-          if (/^\\s*BEGIN\\b/i.test(sql)) {
+          if (/^\s*BEGIN\b/i.test(sql)) {
             if (typeof done === "function") {
               return originalQuery(query, params, (error, result) => {
                 if (error) return done(error);

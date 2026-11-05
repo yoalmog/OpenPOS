@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { createOnlineOrderWithTickets, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
+const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
 
 const app = express();
 
@@ -1069,28 +1069,26 @@ app.get('/api/kitchen/tickets', async (req, res) => {
 });
 
 app.post('/api/kitchen/tickets', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent kitchen storage is unavailable." });
   const { orderNumber, tableNumber, customerName, station, items, channel } = req.body;
   if (!items || !station) return res.status(400).json({ error: "station and items are required." });
-
   const now = Date.now();
   const ticket = {
     id: `ticket_${now}_${Math.random().toString(36).substr(2, 4)}`,
     orderNumber: String(orderNumber || Math.floor(100 + Math.random() * 900)),
-    channel: channel || "POS",
-    tableNumber: tableNumber || null,
-    customerName: customerName || "Walk-in Guest",
-    station,
-    items,
-    status: "PENDING",
-    createdAt: now,
-    targetReadyAt: now + (5 * 60 * 1000),
-    completedAt: null
+    channel: channel || "POS", tableNumber: tableNumber || null,
+    customerName: customerName || "Walk-in Guest", station, items,
+    status: "PENDING", createdAt: now, targetReadyAt: now + (5 * 60 * 1000), completedAt: null
   };
-
-  db.kitchenOrders.unshift(ticket);
-  saveFileData(db);
-  res.json({ success: true, ticket });
+  try {
+    if (pgPool) await createKitchenTicket(pgPool, ticket);
+    else { const db = loadFileData(); db.kitchenOrders.unshift(ticket); saveFileData(db); }
+    return res.json({ success: true, ticket });
+  } catch (error) {
+    console.error("[DB] KDS ticket insert failed:", error.message);
+    return res.status(503).json({ error: "The kitchen ticket could not be safely saved." });
+  }
 });
 
 app.post('/api/kitchen/tickets/:id/status', async (req, res) => {

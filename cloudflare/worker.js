@@ -39,6 +39,7 @@ export default {
       if (url.pathname === "/") assetUrl.pathname = "/index.html";
       if (url.pathname === "/order" || url.pathname === "/order/") assetUrl.pathname = "/order.html";
       if (url.pathname === "/kitchen" || url.pathname === "/kitchen/") assetUrl.pathname = "/kitchen.html";
+      if (url.pathname === "/reset-password" || url.pathname === "/reset-password/") assetUrl.pathname = "/reset-password.html";
       return workerEnv.ASSETS.fetch(new Request(assetUrl, request));
     }
 

@@ -152,32 +152,6 @@ export default {
     }
 
     const connectionString = workerEnv.HYPERDRIVE?.connectionString;
-        const pool = connectionString ? app.configureDatabase(connectionString) : null;
-        if (!pool) {
-          return Response.json({ status: "error", database: "binding_not_configured" }, { status: 503 });
-        }
-        const result = await pool.query("SELECT 1 AS connected, current_user AS database_role");
-        const connected = result.rows[0]?.connected === 1 &&
-          result.rows[0]?.database_role === "openpos_app";
-        return Response.json({
-          status: connected ? "ok" : "unexpected",
-          database: connected ? "connected" : "unexpected_result",
-          databaseRole: result.rows[0]?.database_role || null
-        }, { status: connected ? 200 : 503 });
-      } catch (error) {
-        console.error("OpenPOS Hyperdrive pool probe failed", {
-          name: error?.name || "Error",
-          code: error?.code || null
-        });
-        return Response.json({
-          status: "error",
-          database: "unavailable",
-          errorCode: error?.code || error?.name || "UNKNOWN"
-        }, { status: 503 });
-      }
-    }
-
-    const connectionString = workerEnv.HYPERDRIVE?.connectionString;
     if (connectionString) app.configureDatabase(connectionString);
     return expressHandler.fetch(request);
   }

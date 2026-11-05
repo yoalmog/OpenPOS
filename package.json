@@ -4,7 +4,8 @@
   "description": "OpenPOS - Point of Sale & Back Office",
   "main": "OpenPOS-Backoffice/server.js",
   "scripts": {
-    "start": "node OpenPOS-Backoffice/server.js"
+    "start": "node OpenPOS-Backoffice/server.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

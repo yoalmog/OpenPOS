@@ -118,7 +118,7 @@ Set these environment variables in the Vercel project (Project → Settings → 
 | `SUPABASE_ANON_KEY` | Supabase anon/public key (never the service-role key) |
 | `OPENPOS_OWNER_USER_ID` | The owner's Supabase Auth user UUID |
 
-The owner UUID currently configured as the application default is the owner account created for this project. Set the same UUID explicitly in Vercel so the deployment configuration is visible and controlled.
+Set `OPENPOS_OWNER_USER_ID` to the UUID of the owner account created in Supabase → Authentication → Users. This value is required; without it, no user will be recognized as the configured owner unless their server-managed `app_metadata.role` is set to `owner` or `admin`.
 
 The Back Office and Android POS authenticate directly with Supabase and send the resulting access token as `Authorization: Bearer <token>`. The server verifies the token with Supabase Auth on every API request. There is no shared API key fallback.
 

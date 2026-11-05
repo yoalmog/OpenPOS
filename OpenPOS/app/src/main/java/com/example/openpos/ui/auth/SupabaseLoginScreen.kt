@@ -34,10 +34,13 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SupabaseLoginScreen(
     authManager: SupabaseAuthManager,
+    initialApiBaseUrl: String,
+    onServerUrlChanged: (String) -> Unit,
     onAuthenticated: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf(initialApiBaseUrl) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -52,6 +55,15 @@ fun SupabaseLoginScreen(
             Spacer(Modifier.height(8.dp))
             Text("Sign in with your Supabase owner account", style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(28.dp))
+            OutlinedTextField(
+                value = serverUrl,
+                onValueChange = { serverUrl = it; error = null },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("OpenPOS server URL") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+            )
+            Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it; error = null },
@@ -80,6 +92,12 @@ fun SupabaseLoginScreen(
                     error = null
                     scope.launch {
                         try {
+                            val normalizedServerUrl = serverUrl.trim().removeSuffix("/")
+                            require(normalizedServerUrl.startsWith("https://") || normalizedServerUrl.startsWith("http://")) {
+                                "Enter a valid server URL."
+                            }
+                            onServerUrlChanged(normalizedServerUrl)
+                            authManager.apiBaseUrl = normalizedServerUrl
                             withContext(Dispatchers.IO) { authManager.signIn(email, password) }
                             onAuthenticated()
                         } catch (exception: Exception) {

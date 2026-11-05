@@ -95,13 +95,13 @@ export default {
 
       const client = new Client({
         connectionString: workerEnv.HYPERDRIVE.connectionString,
-        options: "-c role=openpos_app",
         ssl: false,
         connectionTimeoutMillis: 5000
       });
 
       try {
         await client.connect();
+        await client.query("SET ROLE openpos_app");
         const result = await client.query("SELECT 1 AS connected, current_user AS database_role");
         const connected = result.rows[0]?.connected === 1 &&
           result.rows[0]?.database_role === "openpos_app";

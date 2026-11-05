@@ -296,9 +296,15 @@ const DEFAULT_DATA = {
 
 // PostgreSQL Connection Pool Setup
 let pgPool = null;
-const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+let dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
-if (dbUrl) {
+// Can be called by the Cloudflare Worker inside request context after reading
+// the Hyperdrive binding. Existing Node/Vercel deployments keep env-based setup.
+function configureDatabase(connectionString) {
+  if (pgPool) return pgPool;
+  dbUrl = connectionString || dbUrl;
+  if (!dbUrl) return null;
+
   try {
     const { Pool } = require('pg');
     pgPool = new Pool({
@@ -312,7 +318,10 @@ if (dbUrl) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);
     pgPool = null;
   }
+  return pgPool;
 }
+
+if (dbUrl) configureDatabase(dbUrl);
 
 // In-Memory / File Fallback State
 let inMemoryStore = JSON.parse(JSON.stringify(DEFAULT_DATA));
@@ -2008,4 +2017,5 @@ app.post('/api/reset', requireManagerPin, async (req, res) => {
   });
 });
 
+app.configureDatabase = configureDatabase;
 module.exports = app;

@@ -105,3 +105,23 @@ npm start
 ```
 
 Open your browser at: **`http://localhost:3000`**
+
+---
+
+## 🔐 Supabase Authentication (required for the secured API)
+
+Set these environment variables in the Vercel project (Project → Settings → Environment Variables), then redeploy:
+
+| Variable | Value |
+| --- | --- |
+| `SUPABASE_URL` | Supabase project URL, for example `https://<project-ref>.supabase.co` |
+| `SUPABASE_ANON_KEY` | Supabase anon/public key (never the service-role key) |
+| `OPENPOS_OWNER_USER_ID` | The owner's Supabase Auth user UUID |
+
+Set `OPENPOS_OWNER_USER_ID` to the UUID of the owner account created in Supabase → Authentication → Users. This value is required; without it, no user will be recognized as the configured owner unless their server-managed `app_metadata.role` is set to `owner` or `admin`.
+
+The Back Office and Android POS authenticate directly with Supabase and send the resulting access token as `Authorization: Bearer <token>`. The server verifies the token with Supabase Auth on every API request. There is no shared API key fallback.
+
+**Important:** Never put the Supabase service-role key in the browser, Android app, GitHub, or a public environment variable. It is not needed for this authentication flow.
+
+For Google sign-in, enable the Google provider under Supabase → Authentication → Sign In / Providers and configure its OAuth credentials and redirect URLs. Email/password sign-in works with the owner account already created in Supabase.

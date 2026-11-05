@@ -5,9 +5,10 @@ const path = require('path');
 
 const app = express();
 
-// Security Credentials (configurable via environment variables)
-const API_KEY = process.env.OPENPOS_API_KEY || "openpos_sec_key_2026";
-const MANAGER_PIN = process.env.OPENPOS_MANAGER_PIN || "8888";
+// Supabase is the sole API identity provider. Missing configuration fails closed.
+const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const OPENPOS_OWNER_USER_ID = process.env.OPENPOS_OWNER_USER_ID || "";
 
 // Determine environment
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -31,7 +32,7 @@ const DEFAULT_DATA = {
     currency: "$",
     taxRate: 17.0,
     address: "Online Store / Cloud Back Office",
-    apiKey: API_KEY
+    apiKey: null
   },
   categories: [
     { id: "cat_coffee", name: "Coffee & Espresso", color: -16744448 },
@@ -507,28 +508,69 @@ async function initPgTables() {
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Security Middleware: API Key check for sensitive POS and API calls
-function requireApiKey(req, res, next) {
-  const incomingKey = req.headers['x-api-key'] || req.query.apiKey || (req.body && req.body.apiKey);
-  if (!incomingKey || incomingKey !== API_KEY) {
-    return res.status(401).json({
-      error: "Unauthorized",
-      message: "A valid x-api-key header or apiKey query parameter is required."
-    });
+// Public bootstrap endpoint: only the Supabase project URL and anon key are exposed.
+app.get("/api/auth-config", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({
+    configured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
+    supabaseUrl: SUPABASE_URL,
+    supabaseAnonKey: SUPABASE_ANON_KEY
+  });
+});
+
+// Validate every API request against Supabase Auth. Never trust a client-supplied role.
+async function requireSupabaseAuth(req, res, next) {
+  const authorization = req.headers.authorization || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return res.status(401).json({ error: "Unauthorized", message: "A Supabase access token is required." });
   }
-  next();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error("[AUTH] Supabase server configuration is missing.");
+    return res.status(503).json({ error: "Authentication unavailable", message: "Server authentication is not configured." });
+  }
+  try {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: "GET",
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${match[1]}` }
+    });
+    if (!response.ok) {
+      return res.status(401).json({ error: "Unauthorized", message: "The Supabase session is invalid or expired." });
+    }
+    req.authUser = await response.json();
+    return next();
+  } catch (error) {
+    console.error("[AUTH] Supabase user verification failed:", error.message);
+    return res.status(503).json({ error: "Authentication unavailable", message: "Could not verify the Supabase session." });
+  }
 }
 
-// Security Middleware: Manager PIN check for Administrative / Danger actions
-function requireManagerPin(req, res, next) {
-  const pin = req.headers['x-manager-pin'] || req.query.managerPin || (req.body && req.body.managerPin);
-  if (!pin || pin !== MANAGER_PIN) {
-    return res.status(403).json({
-      error: "Forbidden",
-      message: "Manager PIN authorization failed."
-    });
+function hasAdminRole(user) {
+  const role = user && user.app_metadata && user.app_metadata.role;
+  return Boolean(user && (
+    (OPENPOS_OWNER_USER_ID && user.id === OPENPOS_OWNER_USER_ID) ||
+    role === "owner" ||
+    role === "admin"
+  ));
+}
+
+// Protect all API endpoints by default, including read-only and order endpoints.
+app.use("/api", requireSupabaseAuth);
+
+// Compatibility middleware name retained for existing route declarations.
+// It now checks server-verified Supabase identity, not a shared API key.
+function requireApiKey(req, res, next) {
+  if (!hasAdminRole(req.authUser)) {
+    return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required." });
   }
-  next();
+  return next();
+}
+
+function requireManagerPin(req, res, next) {
+  if (!hasAdminRole(req.authUser)) {
+    return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required." });
+  }
+  return next();
 }
 
 // Audit Logger
@@ -636,10 +678,8 @@ app.get('/api/status', async (req, res) => {
 });
 
 app.post('/api/store', async (req, res) => {
-  const incomingPin = req.headers['x-manager-pin'] || req.body.managerPin;
-  const incomingKey = req.headers['x-api-key'] || req.body.apiKey;
-  if (incomingPin !== MANAGER_PIN && incomingKey !== API_KEY) {
-    return res.status(403).json({ error: "Manager PIN or API Key required to change store configuration." });
+  if (!hasAdminRole(req.authUser)) {
+    return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required to change store configuration." });
   }
 
   const db = loadFileData();

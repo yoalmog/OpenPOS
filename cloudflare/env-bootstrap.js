@@ -1,10 +1,9 @@
 import { env } from "cloudflare:workers";
 import process from "node:process";
 
-// Populate the legacy API's Node.js configuration before its static import.
-// These are synchronous binding reads and environment assignments only.
+// These bindings are safe to read synchronously at module initialization.
+// Hyperdrive's connectionString is intentionally read inside fetch().
 process.env.OPENPOS_RUNTIME = "cloudflare";
-process.env.DATABASE_URL = env.HYPERDRIVE?.connectionString || "";
 process.env.PG_NO_SSL = "1";
 process.env.SUPABASE_URL = env.SUPABASE_URL || "";
 process.env.SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY || "";

@@ -26,13 +26,9 @@
       "/api",
       "/api/*",
       "/health",
-      "/health/*",
-      "/order",
-      "/order/",
-      "/kitchen",
-      "/kitchen/"
+      "/health/*"
     ],
-    "html_handling": "none"
+    "html_handling": "auto-trailing-slash"
   },
   "vars": {
     "SERVICE_NAME": "openpos-cloudflare-staging"

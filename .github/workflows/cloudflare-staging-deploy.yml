@@ -59,7 +59,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          printf '%s' "$OPENPOS_HEALTH_TOKEN" | npx --yes wrangler@4 secret put OPENPOS_HEALTH_TOKEN --config=wrangler.jsonc
+          for attempt in 1 2 3 4 5; do
+            if printf '%s' "$OPENPOS_HEALTH_TOKEN" | npx --yes wrangler@4 secret put OPENPOS_HEALTH_TOKEN --config=wrangler.jsonc; then
+              exit 0
+            fi
+            echo "Cloudflare secret update attempt $attempt failed; retrying after backoff."
+            sleep $((attempt * 3))
+          done
+          echo "::error::Unable to update the staging health secret after 5 attempts."
+          exit 1
 
       - name: Deploy isolated staging Worker
         run: npx --yes wrangler@4 deploy --config=wrangler.jsonc

@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feat/cloudflare-workers-hyperdrive-rebased]
+    branches: [feat/cloudflare-static-assets]
     paths:
       - "cloudflare/**"
       - "scripts/**"

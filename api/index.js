@@ -317,33 +317,6 @@ function configureDatabase(connectionString) {
       statement_timeout: 10000
     });
 
-    // The Hyperdrive origin uses Supabase's session pooler on port 5432.
-    // Set the restricted database role on every checkout before API code receives the client.
-    if (isCloudflareWorker) {
-      const originalConnect = pgPool.connect.bind(pgPool);
-      pgPool.connect = function connectWithRestrictedRole(callback) {
-        if (typeof callback === "function") {
-          return originalConnect((error, client, release) => {
-            if (error) return callback(error);
-            client.query("SET ROLE openpos_app")
-              .then(() => callback(null, client, release))
-              .catch((roleError) => {
-                release(roleError);
-                callback(roleError);
-              });
-          });
-        }
-        return originalConnect().then(async (client) => {
-          try {
-            await client.query("SET ROLE openpos_app");
-            return client;
-          } catch (roleError) {
-            client.release(roleError);
-            throw roleError;
-          }
-        });
-      };
-    }
     console.log("[DB] Initializing PostgreSQL client connection pool...");
   } catch (err) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);

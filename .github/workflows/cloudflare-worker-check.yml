@@ -32,5 +32,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Run repository test suite
+        run: npm test
+
       - name: Validate Worker bundle without deploying
         run: npx --yes wrangler@4 deploy --dry-run --outdir=/tmp/openpos-worker-dry-run --config=wrangler.jsonc

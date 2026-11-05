@@ -51,7 +51,7 @@ jobs:
       - name: Cache stable Android debug signing key
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
+          path: ~/.config/.android/debug.keystore
           key: openpos-android-debug-keystore-v1-${{ runner.os }}
       - name: Assemble Android debug APK
         working-directory: OpenPOS
@@ -68,7 +68,7 @@ jobs:
           {
             echo "### Firebase Android SHA-1"
             echo 'Add this fingerprint to Firebase Project settings > Your apps > Android app:'
-            echo "`$SHA1`"
+            echo "$SHA1"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Verify APK and calculate checksum
         working-directory: OpenPOS

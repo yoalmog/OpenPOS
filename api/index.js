@@ -1832,14 +1832,14 @@ app.get('/api/export/items', async (req, res) => {
     return res.status(503).json({ error: "Catalog export is temporarily unavailable." });
   }
   const csvEscape = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\\n";
+  let csv = "Item ID,Name,Price,Category,Barcode,Stock Quantity,Prep Station,Prep Time Minutes\n";
   items.forEach(item => {
     csv += [
       csvEscape(item.id), csvEscape(item.name), Number(item.price) || 0,
       csvEscape(item.categoryId || ""), csvEscape(item.barcode || ""),
       Number(item.stockQuantity) || 0, csvEscape(item.station || ""),
       Number(item.prepTimeMinutes) || 0
-    ].join(",") + "\\n";
+    ].join(",") + "\n";
   });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="openpos_catalog_export.csv"');

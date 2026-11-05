@@ -61,10 +61,18 @@ class MainActivity : ComponentActivity() {
                 CircularProgressIndicator()
               }
               authenticated -> PosScreen(repository = repository)
-              else -> SupabaseLoginScreen(authManager = authManager) {
-                authenticated = true
-                repository.syncManager?.triggerSync()
-              }
+              else -> SupabaseLoginScreen(
+                authManager = authManager,
+                initialApiBaseUrl = repository.settings.value.syncServerUrl,
+                onServerUrlChanged = { serverUrl ->
+                  authManager.apiBaseUrl = serverUrl
+                  repository.updateSettings(repository.settings.value.copy(syncServerUrl = serverUrl))
+                },
+                onAuthenticated = {
+                  authenticated = true
+                  repository.syncManager?.triggerSync()
+                }
+              )
             }
           }
         }

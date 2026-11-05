@@ -1,0 +1,73 @@
+name: Deploy OpenPOS Cloudflare production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/production-proxy.js"
+      - "wrangler.production.jsonc"
+      - ".github/workflows/cloudflare-production-deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openpos-cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required repository secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::Missing GitHub Actions secret CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "::error::Missing GitHub Actions secret CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Apply Cloudflare Node.js compatibility patch
+        run: node scripts/patch-workers-deps.cjs
+
+      - name: Run OpenPOS test suite
+        run: npm test
+
+      - name: Deploy free production workers.dev endpoint
+        run: npx --yes wrangler@4 deploy --config=wrangler.production.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify production storefront and API proxy
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://openpos.b4u2store.workers.dev";
+          for (const path of ["/", "/order", "/kitchen"]) {
+            const response = await fetch(new URL(path, base));
+            if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+            console.log(`${path}: HTTP ${response.status}`);
+          }
+          const health = await fetch(new URL("/health", base));
+          if (!health.ok) throw new Error(`/health returned HTTP ${health.status}`);
+          const healthBody = await health.json();
+          if (healthBody.status !== "ok") throw new Error("Production upstream health check failed");
+          const authConfig = await fetch(new URL("/api/auth-config", base));
+          const authBody = await authConfig.json();
+          if (authBody.configured !== true) throw new Error("Production Supabase auth is not configured");
+          const privateRoute = await fetch(new URL("/api/store", base));
+          if (privateRoute.status !== 401) throw new Error(`Private API returned HTTP ${privateRoute.status}, expected 401`);
+          console.log("Production proxy, Supabase configuration, and API auth boundary verified.");
+          NODE

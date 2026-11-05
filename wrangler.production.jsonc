@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openpos",
+  "main": "cloudflare/production-proxy.js",
+  "compatibility_date": "2026-11-05",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "services": [
+    {
+      "binding": "UPSTREAM",
+      "service": "openpos-cloudflare-staging"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  }
+}

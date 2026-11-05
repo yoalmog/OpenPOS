@@ -4,11 +4,13 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feat/cloudflare-workers-hyperdrive-rebased]
+    branches: [feat/cloudflare-static-assets]
     paths:
       - "cloudflare/**"
       - "scripts/**"
       - "wrangler.jsonc"
+      - "wrangler.production.jsonc"
+      - "cloudflare/production-proxy.js"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/cloudflare-worker-check.yml"
@@ -41,3 +43,6 @@ jobs:
 
       - name: Validate Worker bundle without deploying
         run: npx --yes wrangler@4 deploy --dry-run --outdir=/tmp/openpos-worker-dry-run --config=wrangler.jsonc
+
+      - name: Validate production proxy bundle without deploying
+        run: npx --yes wrangler@4 deploy --dry-run --outdir=/tmp/openpos-production-proxy-dry-run --config=wrangler.production.jsonc

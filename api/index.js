@@ -310,84 +310,12 @@ function configureDatabase(connectionString) {
     pgPool = new Pool({
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
+      max: 2,
+      idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 5000,
-      query_timeout: 10000,
-      statement_timeout: 10000
+      query_timeout: 10000
     });
 
-    // Supabase transaction poolers can reset session state between transactions.
-    // Use SET LOCAL ROLE inside every transaction so all Worker queries are RLS-scoped.
-    if (isCloudflareWorker) {
-      const originalConnect = pgPool.connect.bind(pgPool);
-
-      const wrapClient = (client) => {
-        const originalQuery = client.query.bind(client);
-        client.query = function queryWithRestrictedRole(query, values, callback) {
-          let params = values;
-          let done = callback;
-          if (typeof values === "function") {
-            done = values;
-            params = undefined;
-          }
-          const sql = typeof query === "string" ? query : query?.text || "";
-          if (/^\s*BEGIN\b/i.test(sql)) {
-            if (typeof done === "function") {
-              return originalQuery(query, params, (error, result) => {
-                if (error) return done(error);
-                originalQuery("SET LOCAL ROLE openpos_app", (roleError) => done(roleError || null, result));
-              });
-            }
-            return originalQuery(query, params).then(async (result) => {
-              await originalQuery("SET LOCAL ROLE openpos_app");
-              return result;
-            });
-          }
-          return originalQuery(query, params, done);
-        };
-        return client;
-      };
-
-      pgPool.connect = function connectWithRestrictedRole(callback) {
-        if (typeof callback === "function") {
-          return originalConnect((error, client, release) => {
-            if (error) return callback(error);
-            callback(null, wrapClient(client), release);
-          });
-        }
-        return originalConnect().then(wrapClient);
-      };
-
-      pgPool.query = function queryWithRestrictedRole(query, values, callback) {
-        let params = values;
-        let done = callback;
-        if (typeof values === "function") {
-          done = values;
-          params = undefined;
-        }
-        const operation = (async () => {
-          const client = await originalConnect();
-          try {
-            await client.query("BEGIN");
-            await client.query("SET LOCAL ROLE openpos_app");
-            const result = await client.query(query, params);
-            await client.query("COMMIT");
-            return result;
-          } catch (error) {
-            try { await client.query("ROLLBACK"); } catch (_) {}
-            throw error;
-          } finally {
-            client.release();
-          }
-        })();
-        if (typeof done === "function") {
-          operation.then((result) => done(null, result)).catch(done);
-          return;
-        }
-        return operation;
-      };
-    }
     console.log("[DB] Initializing PostgreSQL client connection pool...");
   } catch (err) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);

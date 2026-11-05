@@ -68,7 +68,7 @@ jobs:
           done
 
           check_http /api/status 200 "$TMP/status.json"
-          node -e "const x=require(process.argv[1]); if(x.status!=='online') process.exit(1); console.log('API status:',x.status,'storage:',x.storageEngine)" "$TMP/status.json"
+          node -e "const x=require(process.argv[1]); if(x.status!=='online'||!x.database?.configured||!x.database?.connected||!x.storageEngine?.startsWith('PostgreSQL')) { console.error('PostgreSQL is not verified:',x); process.exit(1); } console.log('API status:',x.status,'storage:',x.storageEngine,'database:',x.database)" "$TMP/status.json"
 
           check_http /api/categories 200 "$TMP/categories.json"
           node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) process.exit(1); console.log('Categories:',x.length)" "$TMP/categories.json"

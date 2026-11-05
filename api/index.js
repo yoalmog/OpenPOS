@@ -310,8 +310,8 @@ function configureDatabase(connectionString) {
     pgPool = new Pool({
       connectionString: dbUrl,
       ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000
+      max: 2,
+      idleTimeoutMillis: 10000
     });
 
     console.log("[DB] Initializing PostgreSQL client connection pool...");

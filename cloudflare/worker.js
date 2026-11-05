@@ -36,6 +36,7 @@ export default {
         return Response.json({ error: "Static asset binding is not configured" }, { status: 503 });
       }
       const assetUrl = new URL(request.url);
+      if (url.pathname === "/") assetUrl.pathname = "/index.html";
       if (url.pathname === "/order" || url.pathname === "/order/") assetUrl.pathname = "/order.html";
       if (url.pathname === "/kitchen" || url.pathname === "/kitchen/") assetUrl.pathname = "/kitchen.html";
       return workerEnv.ASSETS.fetch(new Request(assetUrl, request));

@@ -363,12 +363,18 @@ function saveFileData(data) {
   }
 }
 
-// Auto-create database tables on PostgreSQL
+// Auto-create database tables on PostgreSQL.
+// Share one initialization promise across concurrent requests so DDL runs once.
+// A failed attempt clears the promise and can be retried on the next request.
 let tablesInitialized = false;
+let tablesInitializationPromise = null;
 async function initPgTables() {
   if (!pgPool || tablesInitialized) return;
-  const client = await pgPool.connect();
-  try {
+  if (tablesInitializationPromise) return tablesInitializationPromise;
+
+  tablesInitializationPromise = (async () => {
+    const client = await pgPool.connect();
+    try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS store_settings (
         key TEXT PRIMARY KEY,
@@ -520,12 +526,20 @@ async function initPgTables() {
       CREATE INDEX IF NOT EXISTS idx_pg_items_cat ON items (category_id);
     `);
     await ensureOperationalTables(pgPool);
-    tablesInitialized = true;
-    console.log("[DB] PostgreSQL schema initialized successfully.");
-  } catch (err) {
-    console.error("[DB] PostgreSQL table init error:", err.message);
+      tablesInitialized = true;
+      console.log("[DB] PostgreSQL schema initialized successfully.");
+    } catch (err) {
+      console.error("[DB] PostgreSQL table init error:", err.message);
+      throw err;
+    } finally {
+      client.release();
+    }
+  })();
+
+  try {
+    await tablesInitializationPromise;
   } finally {
-    client.release();
+    if (!tablesInitialized) tablesInitializationPromise = null;
   }
 }
 

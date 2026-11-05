@@ -16,7 +16,8 @@ app.get('/kitchen', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'kitchen.html'));
 });
 
-app.get('/reset-password', (req, res) => {\n  res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
+app.get('/reset-password', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
 });
 
 // Catch-all route to serve index.html for SPA routing

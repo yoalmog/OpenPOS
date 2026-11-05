@@ -23,12 +23,17 @@
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": [
+      "/",
       "/api",
       "/api/*",
       "/health",
-      "/health/*"
+      "/health/*",
+      "/order",
+      "/order/",
+      "/kitchen",
+      "/kitchen/"
     ],
-    "html_handling": "auto-trailing-slash"
+    "html_handling": "none"
   },
   "vars": {
     "SERVICE_NAME": "openpos-cloudflare-staging"

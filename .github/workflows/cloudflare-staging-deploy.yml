@@ -7,6 +7,7 @@ on:
     paths:
       - "cloudflare/**"
       - "api/**"
+      - "supabase/migrations/**"
       - "wrangler.jsonc"
       - "package.json"
       - "package-lock.json"
@@ -47,6 +48,9 @@ jobs:
 
       - name: Apply Cloudflare Node.js compatibility patch
         run: node scripts/patch-workers-deps.cjs
+
+      - name: Run OpenPOS test suite
+        run: npm test
 
       - name: Sync protected health token to staging Worker
         env:

@@ -41,7 +41,7 @@ export default {
         if (!pool) {
           return Response.json({ status: "error", databasePoolConfigured: false }, { status: 503 });
         }
-        const dbResult = await pool.query("SELECT 1 AS connected");
+        const dbResult = await pool.query("SELECT 1 AS connected, current_user AS database_role");
 
         const configRequest = new Request(new URL("/api/auth-config", request.url), { method: "GET" });
         const configResponse = await expressHandler.fetch(configRequest);
@@ -49,7 +49,8 @@ export default {
 
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
         const response = await expressHandler.fetch(probe);
-        const databaseConnected = dbResult.rows[0]?.connected === 1;
+        const databaseConnected = dbResult.rows[0]?.connected === 1 &&
+          dbResult.rows[0]?.database_role === "openpos_app";
         const authConfigured = authConfig.configured === true;
         const authProtected = response.status === 401;
         const ok = databaseConnected && authConfigured && authProtected;
@@ -58,6 +59,7 @@ export default {
           status: ok ? "ok" : "unexpected",
           databasePoolConfigured: true,
           databaseConnected,
+          databaseRole: dbResult.rows[0]?.database_role || null,
           supabaseConfigured: authConfigured,
           unauthenticatedStatus: response.status
         }, { status: ok ? 200 : 503 });
@@ -93,16 +95,20 @@ export default {
 
       const client = new Client({
         connectionString: workerEnv.HYPERDRIVE.connectionString,
+        options: "-c role=openpos_app",
         connectionTimeoutMillis: 5000
       });
 
       try {
         await client.connect();
-        const result = await client.query("SELECT 1 AS connected");
+        const result = await client.query("SELECT 1 AS connected, current_user AS database_role");
+        const connected = result.rows[0]?.connected === 1 &&
+          result.rows[0]?.database_role === "openpos_app";
         return Response.json({
-          status: "ok",
-          database: result.rows[0]?.connected === 1 ? "connected" : "unexpected_result"
-        });
+          status: connected ? "ok" : "unexpected",
+          database: connected ? "connected" : "unexpected_result",
+          databaseRole: result.rows[0]?.database_role || null
+        }, { status: connected ? 200 : 503 });
       } catch (error) {
         console.error("OpenPOS Hyperdrive probe failed", {
           code: error?.code || "UNKNOWN"

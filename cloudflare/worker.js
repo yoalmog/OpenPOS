@@ -35,18 +35,24 @@ export default {
       if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
         return unauthorized();
       }
+      let probeStage = "database_pool";
       try {
         const connectionString = workerEnv.HYPERDRIVE?.connectionString;
         const pool = connectionString ? app.configureDatabase(connectionString) : null;
         if (!pool) {
           return Response.json({ status: "error", databasePoolConfigured: false }, { status: 503 });
         }
+        probeStage = "database_query";
+        console.log("OpenPOS API probe: database query started");
         const dbResult = await pool.query("SELECT 1 AS connected, current_user AS database_role");
+        console.log("OpenPOS API probe: database query completed", { databaseRole: dbResult.rows[0]?.database_role || null });
 
+        probeStage = "auth_config";
         const configRequest = new Request(new URL("/api/auth-config", request.url), { method: "GET" });
         const configResponse = await expressHandler.fetch(configRequest);
         const authConfig = await configResponse.json();
 
+        probeStage = "private_route_auth";
         const probe = new Request(new URL("/api/store", request.url), { method: "GET" });
         const response = await expressHandler.fetch(probe);
         const databaseConnected = dbResult.rows[0]?.connected === 1 &&
@@ -54,6 +60,7 @@ export default {
         const authConfigured = authConfig.configured === true;
         const authProtected = response.status === 401;
         const ok = databaseConnected && authConfigured && authProtected;
+        console.log("OpenPOS API probe completed", { databaseConnected, databaseRole: dbResult.rows[0]?.database_role || null, authConfigured, unauthenticatedStatus: response.status });
 
         return Response.json({
           status: ok ? "ok" : "unexpected",
@@ -65,11 +72,14 @@ export default {
         }, { status: ok ? 200 : 503 });
       } catch (error) {
         console.error("OpenPOS protected API probe failed", {
+          stage: probeStage,
           name: error?.name || "Error",
+          code: error?.code || null,
           message: error?.message || "Unknown initialization error"
         });
         return Response.json({
           status: "error",
+          stage: probeStage,
           error: error?.message || "API initialization failed",
           stack: error?.stack ? error.stack.split("\n").slice(0, 8).join("\n") : null
         }, { status: 503 });

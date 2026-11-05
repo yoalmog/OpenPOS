@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
+const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
 
 const app = express();
 
@@ -705,7 +706,9 @@ app.get('/api/status', async (req, res) => {
       const catalogCounts = await pgPool.query(
         `SELECT
           (SELECT COUNT(*)::int FROM items) AS items,
-          (SELECT COUNT(*)::int FROM categories) AS categories`
+          (SELECT COUNT(*)::int FROM categories) AS categories,
+          (SELECT COUNT(*)::int FROM ingredients) AS ingredients,
+          (SELECT COUNT(*)::int FROM recipes) AS recipes`
       );
       persistentCatalogCounts = catalogCounts.rows[0];
     } catch (error) {
@@ -733,13 +736,12 @@ app.get('/api/status', async (req, res) => {
     currency: db.storeInfo.currency,
     taxRate: db.storeInfo.taxRate,
     counts: {
-      // Catalog counts always reflect PostgreSQL in production; other legacy modules
-      // remain file-backed until their own migrations are completed.
+      // Catalog, recipes and ingredients counts reflect PostgreSQL in production.
       items: persistentCatalogCounts ? persistentCatalogCounts.items : (db.items || []).length,
       categories: persistentCatalogCounts ? persistentCatalogCounts.categories : (db.categories || []).length,
       receipts: (db.receipts || []).length,
-      recipes: (db.recipes || []).length,
-      ingredients: (db.ingredients || []).length,
+      recipes: persistentCatalogCounts ? persistentCatalogCounts.recipes : (db.recipes || []).length,
+      ingredients: persistentCatalogCounts ? persistentCatalogCounts.ingredients : (db.ingredients || []).length,
       kitchenTickets: (db.kitchenOrders || []).filter(t => t.status !== 'SERVED').length,
       onlineOrders: (db.onlineOrders || []).length
     }
@@ -1012,92 +1014,162 @@ app.delete('/api/items/:id', requireApiKey, async (req, res) => {
 // 4. Raw Ingredients & Inventory API
 // -------------------------------------------------------------
 app.get('/api/ingredients', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.ingredients || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  try {
+    if (pgPool) return res.json(await listIngredients(pgPool));
+    const db = loadFileData();
+    return res.json(db.ingredients || []);
+  } catch (error) {
+    console.error("[DB] Ingredient read failed:", error.message);
+    return res.status(503).json({ error: "Could not read persistent ingredients." });
+  }
 });
 
 app.post('/api/ingredients', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  const db = pgPool ? null : loadFileData();
   const { id, name, unit, unitCost, currentStock, minThreshold } = req.body;
-  if (!name || unitCost === undefined) {
-    return res.status(400).json({ error: "Ingredient name and unitCost are required." });
+  const cost = Number(unitCost);
+  const stock = Number(currentStock ?? 0);
+  const threshold = Number(minThreshold ?? 0);
+  if (!name || typeof name !== "string" || !name.trim() || unitCost === undefined ||
+      !Number.isFinite(cost) || cost < 0 || !Number.isFinite(stock) || stock < 0 ||
+      !Number.isFinite(threshold) || threshold < 0) {
+    return res.status(400).json({ error: "Valid name, non-negative unitCost, currentStock and minThreshold are required." });
   }
 
   const ing = {
     id: id || `ing_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-    name: name.trim(),
-    unit: unit || "g",
-    unitCost: Number(unitCost),
-    currentStock: Number(currentStock || 0),
-    minThreshold: Number(minThreshold || 0)
+    name: name.trim(), unit: unit || "g", unitCost: cost,
+    currentStock: stock, minThreshold: threshold
   };
-
-  const idx = (db.ingredients || []).findIndex(i => i.id === ing.id);
-  if (idx >= 0) db.ingredients[idx] = ing;
-  else db.ingredients.push(ing);
-
-  saveFileData(db);
-  res.json({ success: true, ingredient: ing });
+  try {
+    if (pgPool) await saveIngredient(pgPool, ing);
+    else {
+      const idx = (db.ingredients || []).findIndex(i => i.id === ing.id);
+      if (idx >= 0) db.ingredients[idx] = ing;
+      else db.ingredients.push(ing);
+      saveFileData(db);
+    }
+    return res.json({ success: true, ingredient: ing });
+  } catch (error) {
+    console.error("[DB] Ingredient save failed:", error.message);
+    return res.status(503).json({ error: "Ingredient could not be saved persistently." });
+  }
 });
 
 app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
   const { change, newStock, reason } = req.body;
-  const ing = (db.ingredients || []).find(i => i.id === req.params.id);
-  if (!ing) return res.status(404).json({ error: "Ingredient not found." });
-
-  if (newStock !== undefined) ing.currentStock = Number(newStock);
-  else if (change !== undefined) ing.currentStock = Math.max(0, ing.currentStock + Number(change));
-
-  saveFileData(db);
-  logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
-  res.json({ success: true, ingredient: ing });
+  if ((newStock === undefined && change === undefined) ||
+      (newStock !== undefined && (!Number.isFinite(Number(newStock)) || Number(newStock) < 0)) ||
+      (change !== undefined && !Number.isFinite(Number(change)))) {
+    return res.status(400).json({ error: "A valid non-negative newStock or finite change is required." });
+  }
+  try {
+    let ing;
+    if (pgPool) ing = await updateIngredientStock(pgPool, req.params.id, { change, newStock });
+    else {
+      const db = loadFileData();
+      const local = (db.ingredients || []).find(i => i.id === req.params.id);
+      if (local) {
+        if (newStock !== undefined) local.currentStock = Number(newStock);
+        else local.currentStock = Math.max(0, Number(local.currentStock || 0) + Number(change));
+        saveFileData(db);
+        ing = local;
+      }
+    }
+    if (!ing) return res.status(404).json({ error: "Ingredient not found." });
+    logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
+    return res.json({ success: true, ingredient: ing });
+  } catch (error) {
+    console.error("[DB] Ingredient stock update failed:", error.message);
+    return res.status(503).json({ error: "Ingredient stock could not be updated persistently." });
+  }
 });
 
 // -------------------------------------------------------------
 // 5. Recipe Engine & Food Cost Profitability Matrix
 // -------------------------------------------------------------
 app.get('/api/recipes', async (req, res) => {
-  const db = loadFileData();
-  res.json(db.recipes || []);
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
+  try {
+    if (pgPool) return res.json(await listRecipes(pgPool));
+    const db = loadFileData();
+    return res.json(db.recipes || []);
+  } catch (error) {
+    console.error("[DB] Recipe read failed:", error.message);
+    return res.status(503).json({ error: "Could not read persistent recipes." });
+  }
 });
 
 app.post('/api/recipes', requireApiKey, async (req, res) => {
-  const db = loadFileData();
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent recipe storage is unavailable." });
   const { itemId, itemName, station, prepTimeMinutes, ingredients, laborCost, allergens, instructions } = req.body;
-  if (!itemId || !Array.isArray(ingredients)) {
-    return res.status(400).json({ error: "itemId and ingredients array are required." });
+  if (!itemId || !Array.isArray(ingredients) ||
+      ingredients.some(ing => !ing || !ing.ingredientId || !Number.isFinite(Number(ing.quantity)) || Number(ing.quantity) <= 0)) {
+    return res.status(400).json({ error: "itemId and valid ingredients with positive quantities are required." });
   }
 
+  const db = pgPool ? null : loadFileData();
+  let resolvedItemName = itemName;
+  if (pgPool && !resolvedItemName) {
+    const itemResult = await pgPool.query('SELECT name FROM items WHERE id = $1', [itemId]);
+    resolvedItemName = itemResult.rows[0]?.name;
+  } else if (!pgPool && !resolvedItemName) {
+    resolvedItemName = db.items.find(i => i.id === itemId)?.name;
+  }
   const recipe = {
-    itemId,
-    itemName: itemName || db.items.find(i => i.id === itemId)?.name || "Dish",
-    station: station || "HOT_KITCHEN",
+    itemId, itemName: resolvedItemName || "Dish", station: station || "HOT_KITCHEN",
     prepTimeMinutes: Number(prepTimeMinutes) || 5,
     laborCost: Number(laborCost) || 0,
-    allergens: allergens || "",
-    instructions: instructions || "",
+    allergens: allergens || "", instructions: instructions || "",
     ingredients: ingredients.map(ing => ({
-      ingredientId: ing.ingredientId,
-      name: ing.name,
-      quantity: Number(ing.quantity),
-      unit: ing.unit || "g"
+      ingredientId: ing.ingredientId, name: ing.name || "",
+      quantity: Number(ing.quantity), unit: ing.unit || "g"
     }))
   };
-
-  const idx = (db.recipes || []).findIndex(r => r.itemId === itemId);
-  if (idx >= 0) db.recipes[idx] = recipe;
-  else db.recipes.push(recipe);
-
-  saveFileData(db);
-  res.json({ success: true, recipe });
+  if (!Number.isFinite(recipe.laborCost) || recipe.laborCost < 0) {
+    return res.status(400).json({ error: "laborCost must be a non-negative number." });
+  }
+  try {
+    if (pgPool) await saveRecipe(pgPool, recipe);
+    else {
+      const idx = (db.recipes || []).findIndex(r => r.itemId === itemId);
+      if (idx >= 0) db.recipes[idx] = recipe;
+      else db.recipes.push(recipe);
+      saveFileData(db);
+    }
+    return res.json({ success: true, recipe });
+  } catch (error) {
+    console.error("[DB] Recipe save failed:", error.message);
+    return res.status(503).json({ error: "Recipe could not be saved persistently." });
+  }
 });
 
 app.get('/api/recipes/profitability', async (req, res) => {
-  const db = loadFileData();
-  const items = db.items || [];
-  const ingredients = db.ingredients || [];
-  const recipes = db.recipes || [];
+  await initPgTables();
+  if (isVercel && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent profitability data is unavailable." });
+  const db = pgPool ? loadFileData() : loadFileData();
+  let items = db.items || [];
+  let categories = db.categories || [];
+  let ingredients = db.ingredients || [];
+  let recipes = db.recipes || [];
+  try {
+    if (pgPool) {
+      [items, categories, ingredients, recipes] = await Promise.all([
+        listPgItems(), listPgCategories(), listIngredients(pgPool), listRecipes(pgPool)
+      ]);
+    }
+  } catch (error) {
+    console.error("[DB] Profitability read failed:", error.message);
+    return res.status(503).json({ error: "Could not read persistent profitability data." });
+  }
 
   const matrix = items.map(item => {
     const recipe = recipes.find(r => r.itemId === item.id);
@@ -1134,7 +1206,7 @@ app.get('/api/recipes/profitability', async (req, res) => {
     return {
       itemId: item.id,
       itemName: item.name,
-      category: db.categories.find(c => c.id === item.categoryId)?.name || "General",
+      category: categories.find(c => c.id === item.categoryId)?.name || "General",
       station: recipe?.station || item.station || "HOT_KITCHEN",
       prepTimeMinutes: recipe?.prepTimeMinutes || item.prepTimeMinutes || 5,
       price: Math.round(price * 100) / 100,

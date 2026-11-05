@@ -26,6 +26,9 @@
     "html_handling": "none"
   },
   "vars": {
-    "SERVICE_NAME": "openpos-cloudflare-staging"
+    "SERVICE_NAME": "openpos-cloudflare-staging",
+    "FIREBASE_PROJECT_ID": "openpos-web",
+    "FIREBASE_API_KEY": "AIzaSyA85la4pz4q23rQMq_bHdQ7rjxqrmXCc8o",
+    "OPENPOS_OWNER_EMAIL": "yoalmog@gmail.com"
   }
 }

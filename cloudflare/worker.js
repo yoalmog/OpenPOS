@@ -96,6 +96,7 @@ export default {
       const client = new Client({
         connectionString: workerEnv.HYPERDRIVE.connectionString,
         options: "-c role=openpos_app",
+        ssl: false,
         connectionTimeoutMillis: 5000
       });
 
@@ -114,7 +115,7 @@ export default {
           code: error?.code || "UNKNOWN"
         });
         return Response.json(
-          { status: "error", database: "unavailable" },
+          { status: "error", database: "unavailable", errorCode: error?.code || error?.name || "UNKNOWN" },
           { status: 503 }
         );
       } finally {

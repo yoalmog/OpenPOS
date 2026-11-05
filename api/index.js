@@ -5,6 +5,7 @@ const path = require('path');
 const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, listKitchenTickets, updateOnlineOrderStatus, updateKitchenTicketStatus } = require('./lib/order-repository');
 const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
 const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
+const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
 
 const app = express();
 
@@ -1319,23 +1320,21 @@ app.post('/api/online-orders', async (req, res) => {
     return res.status(400).json({ error: "customerName and a valid items array are required." });
   }
 
-  // Prices and item names are authoritative only when read from the server catalog.
-  // The browser may submit itemId, quantity and notes, but never controls the price.
-  const catalogItems = Array.isArray(db.items) ? db.items : [];
-  const orderItems = [];
-  for (const requestedItem of items) {
-    const catalogItem = catalogItems.find(item => item.id === requestedItem.itemId);
-    const quantity = Number(requestedItem.quantity);
-    if (!catalogItem || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+  // The browser supplies only item IDs, quantities and notes. In Production,
+  // PostgreSQL is the sole source of catalog names and prices.
+  let orderItems;
+  try {
+    orderItems = await buildOnlineOrderItems({
+      pool: pgPool,
+      requestedItems: items,
+      localCatalog: isVercel ? [] : (db.items || [])
+    });
+  } catch (error) {
+    if (error.code === "INVALID_ORDER_ITEM") {
       return res.status(400).json({ error: "An order item is invalid or unavailable." });
     }
-    orderItems.push({
-      itemId: catalogItem.id,
-      name: catalogItem.name,
-      quantity,
-      price: Number(catalogItem.price),
-      notes: typeof requestedItem.notes === "string" ? requestedItem.notes.slice(0, 500) : ""
-    });
+    console.error("[DB] Online order catalog lookup failed:", error.message);
+    return res.status(503).json({ error: "The current catalog is unavailable. Please retry." });
   }
 
   const subtotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);

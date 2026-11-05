@@ -25,7 +25,7 @@ enum class SyncStatus(val label: String) {
 class CloudSyncManager(
     private val dbHelper: PosDatabaseHelper,
     var serverUrl: String = "http://10.0.2.2:3000",
-    var apiKey: String = "openpos_sec_key_2026"
+    var accessTokenProvider: (() -> String?)? = null
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -100,7 +100,9 @@ class CloudSyncManager(
                 conn.connectTimeout = 7000
                 conn.readTimeout = 7000
                 conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("x-api-key", apiKey)
+                val accessToken = accessTokenProvider?.invoke()
+                    ?: throw IllegalStateException("Supabase login is required before cloud sync.")
+                conn.setRequestProperty("Authorization", "Bearer $accessToken")
                 conn.doOutput = true
 
                 val requestBody = JSONObject().apply {

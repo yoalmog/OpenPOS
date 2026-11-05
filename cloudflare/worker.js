@@ -1,6 +1,7 @@
 import { Client } from "pg";
 import { httpServerHandler } from "cloudflare:node";
 import process from "node:process";
+import { createRequire } from "node:module";
 
 function unauthorized() {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,16 +22,16 @@ function getExpressHandler(workerEnv) {
     process.env.SUPABASE_ANON_KEY = workerEnv.SUPABASE_ANON_KEY || "";
     process.env.OPENPOS_OWNER_USER_ID = workerEnv.OPENPOS_OWNER_USER_ID || "";
 
-    expressHandlerPromise = import("../api/index.js")
-      .then(({ default: app }) => {
-        app.listen(8787);
-        return httpServerHandler({ port: 8787 });
-      })
-      .catch((error) => {
-        // Allow a later request to retry initialization after a transient error.
-        expressHandlerPromise = undefined;
-        throw error;
-      });
+    try {
+      const require = createRequire(import.meta.url);
+      const app = require("../api/index.js");
+      app.listen(8787);
+      expressHandlerPromise = Promise.resolve(httpServerHandler({ port: 8787 }));
+    } catch (error) {
+      // Allow a later request to retry initialization after a transient error.
+      expressHandlerPromise = undefined;
+      throw error;
+    }
   }
   return expressHandlerPromise;
 }

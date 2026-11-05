@@ -699,6 +699,20 @@ app.get('/api/status', async (req, res) => {
   }
 
   const db = loadFileData();
+  let persistentCatalogCounts = null;
+  if (databaseConnected) {
+    try {
+      const catalogCounts = await pgPool.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM items) AS items,
+          (SELECT COUNT(*)::int FROM categories) AS categories`
+      );
+      persistentCatalogCounts = catalogCounts.rows[0];
+    } catch (error) {
+      console.error("[DB] Catalog count read failed:", error.message);
+      return res.status(503).json({ status: "degraded", error: "Persistent catalog health check failed." });
+    }
+  }
   const persistentStorage = databaseConnected;
   const status = isVercel && !persistentStorage ? "degraded" : "online";
   res.status(status === "online" ? 200 : 503).json({
@@ -719,8 +733,10 @@ app.get('/api/status', async (req, res) => {
     currency: db.storeInfo.currency,
     taxRate: db.storeInfo.taxRate,
     counts: {
-      items: (db.items || []).length,
-      categories: (db.categories || []).length,
+      // Catalog counts always reflect PostgreSQL in production; other legacy modules
+      // remain file-backed until their own migrations are completed.
+      items: persistentCatalogCounts ? persistentCatalogCounts.items : (db.items || []).length,
+      categories: persistentCatalogCounts ? persistentCatalogCounts.categories : (db.categories || []).length,
       receipts: (db.receipts || []).length,
       recipes: (db.recipes || []).length,
       ingredients: (db.ingredients || []).length,

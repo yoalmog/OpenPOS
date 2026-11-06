@@ -87,7 +87,28 @@ jobs:
           }
           NODE
 
-      - name: Verify Express API and reject unauthenticated access
+
+      - name: Verify live PostgreSQL catalog reads
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://openpos-cloudflare-staging.b4u2store.workers.dev";
+          for (const path of ["/api/categories", "/api/items"]) {
+            const response = await fetch(new URL(path, base), { signal: AbortSignal.timeout(35000) });
+            const body = await response.text();
+            if (!response.ok) {
+              throw new Error(`${path} returned HTTP ${response.status}: ${body.slice(0, 500)}`);
+            }
+            let data;
+            try { data = JSON.parse(body); } catch {
+              throw new Error(`${path} did not return valid JSON: ${body.slice(0, 300)}`);
+            }
+            if (!Array.isArray(data)) {
+              throw new Error(`${path} returned a non-array catalog response.`);
+            }
+            console.log(`${path}: HTTP ${response.status}, ${data.length} real database records`);
+          }
+          NODE
+\n      - name: Verify Express API and reject unauthenticated access
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |

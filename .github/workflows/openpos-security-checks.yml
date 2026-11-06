@@ -127,14 +127,19 @@ jobs:
             check_http "$path" 200 "$TMP/page"
           done
 
-          check_http /api/status 200 "$TMP/status.json"
-          node -e "const x=require(process.argv[1]); if(x.status!=='online'||!x.database?.configured||!x.database?.connected||!x.storageEngine?.startsWith('PostgreSQL')) { console.error('PostgreSQL is not verified:',x); process.exit(1); } console.log('API status:',x.status,'storage:',x.storageEngine,'database:',x.database)" "$TMP/status.json"
-
+          # Test catalog reads first so a status endpoint failure cannot hide them.
           check_http /api/categories 200 "$TMP/categories.json"
-          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) process.exit(1); console.log('Categories:',x.length)" "$TMP/categories.json"
+          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) { console.error('Invalid categories response:',x); process.exit(1); } console.log('Categories:',x.length)" "$TMP/categories.json"
 
           check_http /api/items 200 "$TMP/items.json"
-          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) process.exit(1); console.log('Items:',x.length)" "$TMP/items.json"
+          node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) { console.error('Invalid items response:',x); process.exit(1); } console.log('Items:',x.length)" "$TMP/items.json"
+
+          # Capture the response body even when /api/status is unhealthy.
+          status_code="$(curl --silent --show-error --location --max-time 25 -o "$TMP/status.json" -w '%{http_code}' "$BASE/api/status")"
+          echo "/api/status -> HTTP $status_code"
+          cat "$TMP/status.json"
+          test "$status_code" = "200"
+          node -e "const x=require(process.argv[1]); if(x.status!=='online'||!x.database?.configured||!x.database?.connected||!x.storageEngine?.startsWith('PostgreSQL')) { console.error('PostgreSQL is not verified:',x); process.exit(1); } console.log('API status:',x.status,'storage:',x.storageEngine,'database:',x.database)" "$TMP/status.json"
 
           for path in /api/kitchen/tickets /api/online-orders; do
             check_http "$path" 401 "$TMP/protected.json"

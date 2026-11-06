@@ -912,7 +912,7 @@ async function savePgCategory(category) {
 
 async function listPgItems() {
   const result = await pgPool.query(
-    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants FROM items ORDER BY name'
+    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants::text AS price_variants FROM items ORDER BY name'
   );
   return result.rows.map(row => ({
     id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,

@@ -290,6 +290,18 @@
     }
     .btn-bump:hover { background: rgba(255, 255, 255, 0.15); }
   </style>
+  <style>
+/* OpenPOS Enterprise kitchen display; high-contrast, adaptive palette */
+:root { --kds-bg:#f4f6fa;--kds-header:#fff;--kds-card:#fff;--kds-border:#dce4ef;--kds-green:#16845b;--kds-orange:#b7791f;--kds-red:#c43d4b;--kds-blue:#2457d6;--kds-text:#172033;--kds-text-dim:#64748b; }
+@media(prefers-color-scheme:dark) { :root { --kds-bg:#0c1220;--kds-header:#111a2b;--kds-card:#152137;--kds-border:#26354c;--kds-green:#4bc69a;--kds-orange:#f3bd63;--kds-red:#fb7883;--kds-blue:#6c9cff;--kds-text:#edf2fa;--kds-text-dim:#a8b5c9; } }
+body { background:var(--kds-bg)!important;color:var(--kds-text)!important; }
+.kds-topbar { background:var(--kds-header)!important;border-color:var(--kds-border)!important;box-shadow:0 1px 8px rgba(15,23,42,.04); }
+.kds-ticket { background:var(--kds-card)!important;border:1px solid var(--kds-border)!important;border-radius:14px!important;box-shadow:0 3px 12px rgba(15,23,42,.06)!important; }
+.station-btn { border-radius:9px!important;border-color:var(--kds-border)!important; }
+.station-btn:hover,.station-btn.active { background:var(--kds-blue)!important;border-color:var(--kds-blue)!important;box-shadow:none!important; }
+.kds-board { gap:14px!important;padding:16px!important; }
+button:focus-visible { outline:3px solid rgba(59,130,246,.5);outline-offset:2px; }
+</style>
 </head>
 <body>
 

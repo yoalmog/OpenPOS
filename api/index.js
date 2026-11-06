@@ -316,7 +316,7 @@ function configureDatabase(connectionString) {
       max: 2,
       idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 5000,
-      query_timeout: 30000
+      query_timeout: 15000
     });
 
     console.log("[DB] Initializing PostgreSQL client connection pool...");
@@ -410,9 +410,9 @@ function saveFileData(data) {
   }
 }
 
-// Auto-create database tables on PostgreSQL.
-// Share one initialization promise across concurrent requests so DDL runs once.
-// A failed attempt clears the promise and can be retried on the next request.
+// Production migrations own schema changes. The Worker must never attempt DDL.
+// Keep this check to a minimal live round-trip; actual repository queries verify
+// their required tables and return a persistent-storage error if a migration is missing.
 let tablesInitialized = false;
 let tablesInitializationPromise = null;
 async function initPgTables() {
@@ -420,44 +420,15 @@ async function initPgTables() {
   if (tablesInitializationPromise) return tablesInitializationPromise;
 
   tablesInitializationPromise = (async () => {
-    const requiredTables = [
-      "store_settings",
-      "categories",
-      "items",
-      "ingredients",
-      "recipes",
-      "kitchen_orders",
-      "online_orders",
-      "waste_logs",
-      "temperature_logs",
-      "receipts",
-      "shifts",
-      "audit_logs",
-      "operational_records"
-    ];
     try {
-      const result = await pgPool.query(
-        `SELECT required.table_name
-           FROM unnest($1::text[]) AS required(table_name)
-          WHERE NOT EXISTS (
-            SELECT 1
-              FROM pg_catalog.pg_class AS relation
-              JOIN pg_catalog.pg_namespace AS namespace
-                ON namespace.oid = relation.relnamespace
-             WHERE namespace.nspname = 'public'
-               AND relation.relname = required.table_name
-               AND relation.relkind IN ('r', 'p')
-          )`,
-        [requiredTables]
-      );
-      if (result.rows.length) {
-        const missing = result.rows.map(row => row.table_name);
-        throw new Error(`Database schema is incomplete; missing tables: ${missing.join(", ")}. Apply the committed OpenPOS migrations before starting the Worker.`);
-      }
+      await pgPool.query("SELECT 1 AS connected");
       tablesInitialized = true;
-      console.log("[DB] PostgreSQL schema readiness verified.");
+      console.log("[DB] PostgreSQL connection readiness verified.");
     } catch (err) {
-      console.error("[DB] PostgreSQL schema readiness check failed:", err.message);
+      console.error("[DB] PostgreSQL connection readiness check failed:", {
+        code: err?.code || null,
+        message: err?.message || "Unknown database error"
+      });
       throw err;
     }
   })();

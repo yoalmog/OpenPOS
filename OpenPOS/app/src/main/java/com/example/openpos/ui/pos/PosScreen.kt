@@ -95,6 +95,7 @@ fun PosScreen(
     var activeTab by remember { mutableStateOf(PosTab.CATALOG) }
     var selectedCategoryId by remember { mutableStateOf<String?>(null) }
     var itemForModifierDialog by remember { mutableStateOf<Item?>(null) }
+    var itemForVariantDialog by remember { mutableStateOf<Item?>(null) }
     var showPaymentDialog by remember { mutableStateOf(false) }
     var showTicketsDialog by remember { mutableStateOf(false) }
     var showShiftDialog by remember { mutableStateOf(false) }
@@ -392,10 +393,10 @@ fun PosScreen(
                         onSelectCategory = { selectedCategoryId = it },
                         onAddItem = { showAddProductDialog = true },
                         onItemClick = { item ->
-                            if (item.modifiers.isNotEmpty()) {
-                                itemForModifierDialog = item
-                            } else {
-                                repository.addItemToCart(item)
+                            when {
+                                item.priceVariants.isNotEmpty() -> itemForVariantDialog = item
+                                item.modifiers.isNotEmpty() -> itemForModifierDialog = item
+                                else -> repository.addItemToCart(item)
                             }
                         },
                         onItemLongClick = { item ->
@@ -464,6 +465,19 @@ fun PosScreen(
                 TextButton(onClick = { itemToDelete = null }) {
                     Text(strings.cancel)
                 }
+            }
+        )
+    }
+
+    // Price variant dialog (e.g. Personal / Mediana / Familiar)
+    itemForVariantDialog?.let { item ->
+        PriceVariantSelectionDialog(
+            item = item,
+            currencyFormat = currencyFormat,
+            onDismiss = { itemForVariantDialog = null },
+            onConfirm = { variant ->
+                repository.addItemToCart(item, priceVariant = variant)
+                itemForVariantDialog = null
             }
         )
     }
@@ -986,7 +1000,10 @@ fun ItemCard(
                 verticalAlignment = Alignment.Bottom
             ) {
                 Text(
-                    currencyFormat.format(item.price),
+                    if (item.priceVariants.isNotEmpty()) {
+                        val prices = item.priceVariants.map { it.price }
+                        "${currencyFormat.format(prices.minOrNull() ?: item.price)} – ${currencyFormat.format(prices.maxOrNull() ?: item.price)}"
+                    } else currencyFormat.format(item.price),
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 15.sp
@@ -1028,9 +1045,12 @@ fun CartItemRow(
                     fontWeight = FontWeight.Medium,
                     fontSize = 14.sp
                 )
-                if (cartItem.selectedModifiers.isNotEmpty()) {
+                if (cartItem.selectedPriceVariant != null || cartItem.selectedModifiers.isNotEmpty()) {
                     Text(
-                        cartItem.selectedModifiers.joinToString(", ") { it.name },
+                        listOfNotNull(
+                            cartItem.selectedPriceVariant?.name,
+                            cartItem.selectedModifiers.takeIf { it.isNotEmpty() }?.joinToString(", ") { it.name }
+                        ).joinToString(" • "),
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1169,6 +1189,49 @@ fun AddProductDialog(
                 Text(strings.cancel)
             }
         }
+    )
+}
+
+@Composable
+fun PriceVariantSelectionDialog(
+    item: Item,
+    currencyFormat: DecimalFormat,
+    onDismiss: () -> Unit,
+    onConfirm: (PriceVariant) -> Unit
+) {
+    var selectedId by remember(item.id) {
+        mutableStateOf(item.priceVariants.firstOrNull()?.id.orEmpty())
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Choose size • ${item.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                item.priceVariants.forEach { variant ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedId = variant.id }
+                            .padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedId == variant.id,
+                            onClick = { selectedId = variant.id }
+                        )
+                        Text(variant.name, modifier = Modifier.weight(1f))
+                        Text(currencyFormat.format(variant.price), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { item.priceVariants.firstOrNull { it.id == selectedId }?.let(onConfirm) },
+                enabled = item.priceVariants.any { it.id == selectedId }
+            ) { Text("Add to order") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 

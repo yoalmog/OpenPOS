@@ -316,7 +316,7 @@ function configureDatabase(connectionString) {
       max: 2,
       idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 5000,
-      query_timeout: 10000
+      query_timeout: 30000
     });
 
     console.log("[DB] Initializing PostgreSQL client connection pool...");
@@ -437,9 +437,17 @@ async function initPgTables() {
     ];
     try {
       const result = await pgPool.query(
-        `SELECT table_name
+        `SELECT required.table_name
            FROM unnest($1::text[]) AS required(table_name)
-          WHERE to_regclass(format('public.%I', required.table_name)) IS NULL`,
+          WHERE NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_class AS relation
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = relation.relnamespace
+             WHERE namespace.nspname = 'public'
+               AND relation.relname = required.table_name
+               AND relation.relkind IN ('r', 'p')
+          )`,
         [requiredTables]
       );
       if (result.rows.length) {

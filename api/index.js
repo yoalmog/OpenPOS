@@ -305,6 +305,8 @@ let dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 // the Hyperdrive binding. Existing Node/Vercel deployments keep env-based setup.
 function configureDatabase(connectionString) {
   if (pgPool) return pgPool;
+  // Cloudflare requests must create a Client in resetDatabase(), not a module-global Pool.
+  if (isCloudflareWorker) return null;
   dbUrl = connectionString || dbUrl;
   if (!dbUrl) return null;
 
@@ -319,7 +321,7 @@ function configureDatabase(connectionString) {
       query_timeout: 15000
     });
 
-    console.log("[DB] Initializing PostgreSQL client connection pool...");
+    console.log("[DB] Initializing PostgreSQL connection pool...");
   } catch (err) {
     console.error("[DB] Failed to load pg module or create pool:", err.message);
     pgPool = null;
@@ -327,26 +329,53 @@ function configureDatabase(connectionString) {
   return pgPool;
 }
 
-// Cloudflare Workers must not reuse node-postgres sockets across request invocations.
-// Hyperdrive owns the origin pool; create a fresh Worker-side pool for each API request.
+// Hyperdrive already pools origin connections. Cloudflare requires a fresh
+// node-postgres Client per invocation; a driver-level Pool/global socket can
+// retain stale request-context I/O and intermittently time out.
 async function resetDatabase(connectionString) {
-  const previousPool = pgPool;
+  const previousClient = pgPool;
   pgPool = null;
   tablesInitialized = false;
   tablesInitializationPromise = null;
-  if (previousPool) {
-    try { await previousPool.end(); }
+
+  if (isCloudflareWorker) {
+    if (!connectionString) return null;
+    try {
+      const { Client } = require('pg');
+      const client = new Client({
+        connectionString,
+        ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
+        connectionTimeoutMillis: 10000,
+        query_timeout: 15000
+      });
+      await client.connect();
+      pgPool = client;
+      console.log("[DB] Request-scoped Hyperdrive PostgreSQL client connected.");
+      return pgPool;
+    } catch (error) {
+      console.error("[DB] Request-scoped Hyperdrive client connection failed:", {
+        code: error?.code || null,
+        message: error?.message || "Unknown connection error"
+      });
+      throw error;
+    }
+  }
+
+  if (previousClient) {
+    try { await previousClient.end(); }
     catch (error) { console.warn("[DB] Previous request pool close warning:", error.message); }
   }
   return configureDatabase(connectionString);
 }
 
 async function closeDatabase() {
-  const currentPool = pgPool;
+  const currentClient = pgPool;
   pgPool = null;
   tablesInitialized = false;
   tablesInitializationPromise = null;
-  if (currentPool) await currentPool.end();
+  // Hyperdrive connections are automatically cleaned up at the end of the
+  // Worker invocation. Do not call Client.end() in the Cloudflare runtime.
+  if (currentClient && !isCloudflareWorker) await currentClient.end();
 }
 
 if (dbUrl) configureDatabase(dbUrl);
@@ -911,31 +940,17 @@ async function savePgCategory(category) {
 }
 
 async function listPgItems() {
-  console.log("[DB] Item catalog scalar query starting.");
   const result = await pgPool.query(
-    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes FROM public.items'
+    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants::text AS price_variants FROM public.items ORDER BY name'
   );
-  console.log("[DB] Item catalog scalar rows read:", result.rows.length);
-
-  console.log("[DB] Item catalog price variants query starting.");
-  const variantsResult = await pgPool.query(
-    'SELECT id, price_variants::text AS price_variants FROM public.items'
-  );
-  console.log("[DB] Item catalog price variants read:", variantsResult.rows.length);
-  const variantsById = new Map(variantsResult.rows.map(row => [
-    row.id,
-    typeof row.price_variants === "string" ? JSON.parse(row.price_variants) : (row.price_variants || [])
-  ]));
-
-  return result.rows
-    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
-    .map(row => ({
-      id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
-      barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
-      stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
-      prepTimeMinutes: Number(row.prep_time_minutes || 5),
-      priceVariants: variantsById.get(row.id) || []
-    }));
+  return result.rows.map(row => ({
+    id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
+    barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
+    stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
+    prepTimeMinutes: Number(row.prep_time_minutes || 5),
+    priceVariants: Array.isArray(row.price_variants) ? row.price_variants
+      : (typeof row.price_variants === "string" ? JSON.parse(row.price_variants) : [])
+  }));
 }
 
 async function savePgItem(item) {
@@ -1514,7 +1529,7 @@ app.post('/api/waste', requireApiKey, async (req, res) => {
     timestamp: Date.now()
   };
   if (pgPool) {
-    const client = await pgPool.connect();
+    const client = isCloudflareWorker ? pgPool : await pgPool.connect();
     try {
       await client.query("BEGIN");
       await upsertOperationalRecord(client, "waste_logs", wasteEntry);
@@ -1530,7 +1545,7 @@ app.post('/api/waste', requireApiKey, async (req, res) => {
       await client.query("ROLLBACK").catch(() => {});
       console.error("[DB] Waste-log transaction failed:", error.message);
       return res.status(503).json({ error: "Waste log and inventory adjustment could not be saved." });
-    } finally { client.release(); }
+    } finally { if (!isCloudflareWorker) client.release(); }
   } else {
     const db = loadFileData();
     db.wasteLogs = db.wasteLogs || [];

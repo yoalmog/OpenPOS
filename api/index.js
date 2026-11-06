@@ -344,14 +344,47 @@ async function resetDatabase(connectionString) {
     dbUrl = connectionString;
     try {
       const { Client } = require('pg');
-      const client = new Client({
-        connectionString,
-        ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
-        connectionTimeoutMillis: 10000,
-        query_timeout: 30000
-      });
-      await client.connect();
-      pgPool = client;
+      let client = null;
+      let inTransaction = false;
+      const createClient = async () => {
+        const nextClient = new Client({
+          connectionString,
+          ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
+          connectionTimeoutMillis: 10000,
+          query_timeout: 15000
+        });
+        await nextClient.connect();
+        client = nextClient;
+      };
+
+      await createClient();
+      // Keep the request-scoped Client behind the same query interface used by
+      // the repositories. Retry one idempotent read on a transient Hyperdrive
+      // read timeout by opening a fresh Client; never retry writes or transactions.
+      pgPool = {
+        async query(...args) {
+          const sql = typeof args[0] === "string" ? args[0] : (args[0]?.text || "");
+          const normalized = sql.trim();
+          const beginsTransaction = /^BEGIN\\b/i.test(normalized);
+          const endsTransaction = /^(COMMIT|ROLLBACK)\\b/i.test(normalized);
+          const isReadOnly = /^SELECT\\b/i.test(normalized);
+
+          if (beginsTransaction) inTransaction = true;
+          try {
+            const result = await client.query(...args);
+            if (endsTransaction) inTransaction = false;
+            return result;
+          } catch (error) {
+            if (endsTransaction) inTransaction = false;
+            if (isReadOnly && !inTransaction && /Query read timeout/i.test(error?.message || "")) {
+              console.warn("[DB] Retrying one read after transient Hyperdrive timeout.");
+              await createClient();
+              return client.query(...args);
+            }
+            throw error;
+          }
+        }
+      };
       console.log("[DB] Request-scoped Hyperdrive PostgreSQL client connected.");
       return pgPool;
     } catch (error) {

@@ -735,7 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('modalProductPrepTime').value = Number(item.prepTimeMinutes || 5);
     document.getElementById('modalProductBarcode').value = item.barcode || '';
     document.getElementById('modalProductVariants').value = (item.priceVariants || [])
-      .map(variant => `${variant.name} | ${Number(variant.price).toFixed(2)}`).join('\\n');
+      .map(variant => `${variant.name} | ${Number(variant.price).toFixed(2)}`).join('\n');
     state.selectedProductColor = item.color || '#2E7D32';
     openModal(productModal);
   };
@@ -886,7 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('productForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const variantLines = document.getElementById('modalProductVariants').value
-        .split('\\n').map(line => line.trim()).filter(Boolean);
+        .split('\n').map(line => line.trim()).filter(Boolean);
       const priceVariants = [];
       for (const line of variantLines) {
         const parts = line.split('|');

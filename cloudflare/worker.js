@@ -5,8 +5,9 @@ import { httpServerHandler } from "cloudflare:node";
 app.listen(8787);
 const expressHandler = httpServerHandler({ port: 8787 });
 
-// A module-global pg Pool can retain sockets after a Worker invocation ends.
-// Serialize requests within this isolate and create/close a fresh Pool per request.
+// Never reuse database I/O across Worker invocations. Each request gets a
+// fresh node-postgres Client; Hyperdrive owns and cleans up the origin pool.
+// Serialize requests within this isolate because the Express bridge uses one API module.
 let apiRequestQueue = Promise.resolve();
 function withRequestDatabase(connectionString, handler) {
   const run = apiRequestQueue.then(async () => {

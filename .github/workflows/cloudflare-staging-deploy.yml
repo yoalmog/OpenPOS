@@ -113,23 +113,31 @@ jobs:
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |
-          response="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 2 \
-            -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
-            https://openpos-cloudflare-staging.b4u2store.workers.dev/health/api)"
-          printf '%s' "$response" | node -e '
-            let body = "";
-            process.stdin.on("data", chunk => body += chunk);
-            process.stdin.on("end", () => {
-              const result = JSON.parse(body);
-              if (
-                result.status !== "ok" ||
-                result.databaseConnected !== true ||
-                result.supabaseConfigured !== true ||
-                result.unauthenticatedStatus !== 401
-              ) {
-                console.error("Express API readiness probe failed:", result);
-                process.exit(1);
-              }
-              console.log("OpenPOS API pool, Supabase configuration, and auth boundary verified.");
-            });
-          '
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          status_code=""
+          for attempt in 1 2 3; do
+            : > "$response_file"
+            status_code="$(curl --silent --show-error --connect-timeout 5 --max-time 40 \
+              -o "$response_file" -w '%{http_code}' \
+              -H "Authorization: Bearer $OPENPOS_HEALTH_TOKEN" \
+              https://openpos-cloudflare-staging.b4u2store.workers.dev/health/api || true)"
+            if [ "$status_code" = "200" ]; then break; fi
+            echo "Health probe attempt $attempt returned HTTP ${status_code:-000}; retrying."
+            sleep $((attempt * 2))
+          done
+          test "$status_code" = "200" || { cat "$response_file"; exit 1; }
+          node - "$response_file" <<'NODE'
+          const fs = require("node:fs");
+          const result = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (
+            result.status !== "ok" ||
+            result.databaseConnected !== true ||
+            result.supabaseConfigured !== true ||
+            result.unauthenticatedStatus !== 401
+          ) {
+            console.error("Express API readiness probe failed:", result);
+            process.exit(1);
+          }
+          console.log("OpenPOS API connection, Supabase configuration, and auth boundary verified.");
+          NODE

@@ -365,9 +365,9 @@ async function resetDatabase(connectionString) {
         async query(...args) {
           const sql = typeof args[0] === "string" ? args[0] : (args[0]?.text || "");
           const normalized = sql.trim();
-          const beginsTransaction = /^BEGIN\\b/i.test(normalized);
-          const endsTransaction = /^(COMMIT|ROLLBACK)\\b/i.test(normalized);
-          const isReadOnly = /^SELECT\\b/i.test(normalized);
+          const beginsTransaction = /^BEGIN\b/i.test(normalized);
+          const endsTransaction = /^(COMMIT|ROLLBACK)\b/i.test(normalized);
+          const isReadOnly = /^SELECT\b/i.test(normalized);
 
           if (beginsTransaction) inTransaction = true;
           try {

@@ -3,6 +3,7 @@ package com.example.openpos.sync
 import com.example.openpos.database.PosDatabaseHelper
 import com.example.openpos.model.Category
 import com.example.openpos.model.Item
+import com.example.openpos.model.PriceVariant
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

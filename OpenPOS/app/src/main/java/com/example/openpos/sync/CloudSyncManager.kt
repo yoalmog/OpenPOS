@@ -175,7 +175,18 @@ class CloudSyncManager(
                                         color = iObj.optLong("color", 0xFF2E7D32),
                                         stockQuantity = iObj.optInt("stockQuantity", 100),
                                         station = iObj.optString("station", "HOT_KITCHEN"),
-                                        prepTimeMinutes = iObj.optInt("prepTimeMinutes", 5)
+                                        prepTimeMinutes = iObj.optInt("prepTimeMinutes", 5),
+                                        priceVariants = if (iObj.has("priceVariants") && !iObj.isNull("priceVariants")) {
+                                            val variants = iObj.getJSONArray("priceVariants")
+                                            (0 until variants.length()).map { variantIndex ->
+                                                val variant = variants.getJSONObject(variantIndex)
+                                                PriceVariant(
+                                                    id = variant.optString("id", "variant_$variantIndex"),
+                                                    name = variant.optString("name", ""),
+                                                    price = variant.optDouble("price", 0.0)
+                                                )
+                                            }
+                                        } else emptyList()
                                     )
                                 )
                             }

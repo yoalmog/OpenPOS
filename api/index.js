@@ -912,14 +912,25 @@ async function savePgCategory(category) {
 
 async function listPgItems() {
   const result = await pgPool.query(
-    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants::text AS price_variants FROM items ORDER BY name'
+    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes FROM items ORDER BY name'
   );
+  console.log("[DB] Item catalog scalar rows read:", result.rows.length);
+
+  const variantsResult = await pgPool.query(
+    'SELECT id, price_variants::text AS price_variants FROM items'
+  );
+  console.log("[DB] Item catalog price variants read:", variantsResult.rows.length);
+  const variantsById = new Map(variantsResult.rows.map(row => [
+    row.id,
+    typeof row.price_variants === "string" ? JSON.parse(row.price_variants) : (row.price_variants || [])
+  ]));
+
   return result.rows.map(row => ({
     id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
     barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
     stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
     prepTimeMinutes: Number(row.prep_time_minutes || 5),
-    priceVariants: Array.isArray(row.price_variants) ? row.price_variants : (typeof row.price_variants === "string" ? JSON.parse(row.price_variants) : [])
+    priceVariants: variantsById.get(row.id) || []
   }));
 }
 

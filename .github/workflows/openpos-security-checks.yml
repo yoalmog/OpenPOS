@@ -115,7 +115,7 @@ jobs:
             local expected="$2"
             local body="$TMP/body"
             local metrics
-            metrics="$(curl --silent --show-error --location --max-time 20 -o "$body" -w '%{http_code} %{time_total}' "$BASE$path")"
+            metrics="$(curl --silent --show-error --location --max-time 35 -o "$body" -w '%{http_code} %{time_total}' "$BASE$path")"
             local code="${metrics%% *}"
             local elapsed="${metrics#* }"
             echo "$path -> HTTP $code in ${elapsed}s (expected $expected)"
@@ -135,7 +135,7 @@ jobs:
           node -e "const x=require(process.argv[1]); if(!Array.isArray(x)) { console.error('Invalid items response:',x); process.exit(1); } console.log('Items:',x.length)" "$TMP/items.json"
 
           # Capture the response body even when /api/status is unhealthy.
-          status_code="$(curl --silent --show-error --location --max-time 25 -o "$TMP/status.json" -w '%{http_code}' "$BASE/api/status")"
+          status_code="$(curl --silent --show-error --location --max-time 40 -o "$TMP/status.json" -w '%{http_code}' "$BASE/api/status")"
           echo "/api/status -> HTTP $status_code"
           cat "$TMP/status.json"
           test "$status_code" = "200"

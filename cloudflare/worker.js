@@ -5,6 +5,32 @@ import { httpServerHandler } from "cloudflare:node";
 app.listen(8787);
 const expressHandler = httpServerHandler({ port: 8787 });
 
+// A module-global pg Pool can retain sockets after a Worker invocation ends.
+// Serialize requests within this isolate and create/close a fresh Pool per request.
+let apiRequestQueue = Promise.resolve();
+function withRequestDatabase(connectionString, handler) {
+  const run = apiRequestQueue.then(async () => {
+    if (connectionString) await app.resetDatabase(connectionString);
+    try {
+      const response = await handler();
+      const body = await response.arrayBuffer();
+      const headers = new Headers(response.headers);
+      for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]) {
+        headers.delete(name);
+      }
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
+    } finally {
+      await app.closeDatabase();
+    }
+  });
+  apiRequestQueue = run.catch(() => {});
+  return run;
+}
+
 function unauthorized() {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
 }
@@ -44,6 +70,7 @@ export default {
     }
 
     if (url.pathname === "/health/api") {
+      return withRequestDatabase(workerEnv.HYPERDRIVE?.connectionString, async () => {
       if (request.method !== "GET") {
         return Response.json({ error: "Method not allowed" }, { status: 405 });
       }
@@ -103,10 +130,9 @@ export default {
           stack: error?.stack ? error.stack.split("\n").slice(0, 8).join("\n") : null
         }, { status: 503 });
       }
+      });
     }
 
-    const connectionString = workerEnv.HYPERDRIVE?.connectionString;
-    if (connectionString) app.configureDatabase(connectionString);
-    return expressHandler.fetch(request);
+    return withRequestDatabase(workerEnv.HYPERDRIVE?.connectionString, () => expressHandler.fetch(request));
   }
 };

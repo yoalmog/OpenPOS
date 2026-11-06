@@ -327,6 +327,28 @@ function configureDatabase(connectionString) {
   return pgPool;
 }
 
+// Cloudflare Workers must not reuse node-postgres sockets across request invocations.
+// Hyperdrive owns the origin pool; create a fresh Worker-side pool for each API request.
+async function resetDatabase(connectionString) {
+  const previousPool = pgPool;
+  pgPool = null;
+  tablesInitialized = false;
+  tablesInitializationPromise = null;
+  if (previousPool) {
+    try { await previousPool.end(); }
+    catch (error) { console.warn("[DB] Previous request pool close warning:", error.message); }
+  }
+  return configureDatabase(connectionString);
+}
+
+async function closeDatabase() {
+  const currentPool = pgPool;
+  pgPool = null;
+  tablesInitialized = false;
+  tablesInitializationPromise = null;
+  if (currentPool) await currentPool.end();
+}
+
 if (dbUrl) configureDatabase(dbUrl);
 
 // In-Memory / File Fallback State.
@@ -1978,4 +2000,6 @@ app.post('/api/reset', requireManagerPin, async (req, res) => {
 });
 
 app.configureDatabase = configureDatabase;
+app.resetDatabase = resetDatabase;
+app.closeDatabase = closeDatabase;
 module.exports = app;

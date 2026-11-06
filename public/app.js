@@ -143,26 +143,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Theme Toggle
   function initTheme() {
-    const savedTheme = localStorage.getItem('pos_theme') || 'dark';
-    if (savedTheme === 'light') {
-      document.body.classList.remove('dark-theme');
-      document.body.classList.add('light-theme');
-      themeToggleBtn.innerHTML = '<i class="fa-solid fa-moon"></i>';
-    }
-
-    themeToggleBtn.addEventListener('click', () => {
-      if (document.body.classList.contains('dark-theme')) {
-        document.body.classList.remove('dark-theme');
-        document.body.classList.add('light-theme');
-        themeToggleBtn.innerHTML = '<i class="fa-solid fa-moon"></i>';
-        localStorage.setItem('pos_theme', 'light');
-      } else {
-        document.body.classList.remove('light-theme');
-        document.body.classList.add('dark-theme');
-        themeToggleBtn.innerHTML = '<i class="fa-solid fa-sun"></i>';
-        localStorage.setItem('pos_theme', 'dark');
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    let savedTheme = localStorage.getItem('pos_theme') || 'auto';
+    const applyTheme = () => {
+      const dark = savedTheme === 'dark' || (savedTheme === 'auto' && media.matches);
+      document.body.classList.toggle('dark-theme', dark);
+      document.body.classList.toggle('light-theme', !dark);
+      document.body.dataset.themePreference = savedTheme;
+      if (themeToggleBtn) {
+        themeToggleBtn.setAttribute('aria-label', savedTheme === 'auto' ? 'Theme: automatic' : 'Switch theme');
+        themeToggleBtn.title = savedTheme === 'auto' ? 'Automatic theme (follows device)' : 'Switch theme';
+        themeToggleBtn.innerHTML = savedTheme === 'auto'
+          ? '<i class="fa-solid fa-circle-half-stroke"></i>'
+          : (dark ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>');
       }
       renderSalesChart();
+    };
+    applyTheme();
+    if (media.addEventListener) media.addEventListener('change', () => { if (savedTheme === 'auto') applyTheme(); });
+    else if (media.addListener) media.addListener(() => { if (savedTheme === 'auto') applyTheme(); });
+    themeToggleBtn?.addEventListener('click', () => {
+      savedTheme = savedTheme === 'auto' ? (media.matches ? 'light' : 'dark') : (savedTheme === 'dark' ? 'light' : 'dark');
+      localStorage.setItem('pos_theme', savedTheme);
+      applyTheme();
     });
   }
 

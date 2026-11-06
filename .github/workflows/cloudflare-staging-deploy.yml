@@ -108,7 +108,8 @@ jobs:
             console.log(`${path}: HTTP ${response.status}, ${data.length} real database records`);
           }
           NODE
-\n      - name: Verify Express API and reject unauthenticated access
+
+      - name: Verify Express API and reject unauthenticated access
         env:
           OPENPOS_HEALTH_TOKEN: ${{ secrets.OPENPOS_HEALTH_TOKEN }}
         run: |

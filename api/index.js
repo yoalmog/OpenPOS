@@ -340,6 +340,8 @@ async function resetDatabase(connectionString) {
 
   if (isCloudflareWorker) {
     if (!connectionString) return null;
+    // Keep health/status reporting in sync with the active Hyperdrive binding.
+    dbUrl = connectionString;
     try {
       const { Client } = require('pg');
       const client = new Client({

@@ -560,6 +560,22 @@
       color: #fff;
     }
   </style>
+  <style>
+/* OpenPOS Enterprise storefront tokens; honors OS appearance */
+:root { --store-bg:#f4f6fa;--store-surface:#fff;--store-surface-glass:rgba(255,255,255,.94);--store-border:#e2e8f0;--store-text:#172033;--store-text-muted:#64748b;--store-primary:#2457d6;--store-primary-dark:#1d46b3;--store-accent:#d49a32; }
+@media(prefers-color-scheme:dark) {
+ :root { --store-bg:#0c1220;--store-surface:#152137;--store-surface-glass:rgba(17,26,43,.94);--store-border:#26354c;--store-text:#edf2fa;--store-text-muted:#a8b5c9;--store-primary:#6c9cff;--store-primary-dark:#8aafff;--store-accent:#f3bd63; }
+}
+body { background:var(--store-bg)!important;color:var(--store-text)!important; }
+.store-navbar { background:var(--store-surface-glass)!important;border-color:var(--store-border)!important;box-shadow:0 1px 10px rgba(15,23,42,.04); }
+.brand-logo-icon { background:linear-gradient(145deg,var(--store-primary),#527ee9)!important;box-shadow:none!important;border-radius:12px!important; }
+.cart-trigger-btn { background:var(--store-primary)!important;box-shadow:none!important;border-radius:10px!important; }
+.hero-banner { background:linear-gradient(135deg,rgba(36,87,214,.10),transparent 65%),var(--store-surface)!important; }
+.menu-item-card,.product-card,.cart-drawer,.checkout-modal,.menu-section,.category-pill { border-color:var(--store-border)!important; }
+.menu-item-card,.product-card { border-radius:14px!important;box-shadow:0 2px 8px rgba(15,23,42,.045)!important; }
+button,input,select,textarea { font:inherit; }
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid rgba(59,130,246,.5);outline-offset:2px; }
+</style>
 </head>
 <body>
 

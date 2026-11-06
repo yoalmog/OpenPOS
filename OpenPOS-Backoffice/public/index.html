@@ -665,13 +665,19 @@
 
           <div class="form-row">
             <div class="form-group flex-1">
-              <label for="modalProductPrice">Price ($) *</label>
+              <label for="modalProductPrice">Base Price *</label>
               <input type="number" id="modalProductPrice" class="form-input" required step="0.01" min="0" placeholder="0.00">
             </div>
             <div class="form-group flex-1">
               <label for="modalProductStock">Stock Units</label>
               <input type="number" id="modalProductStock" class="form-input" min="0" value="100">
             </div>
+          </div>
+
+          <div class="form-group">
+            <label for="modalProductVariants">Size / price options (optional)</label>
+            <textarea id="modalProductVariants" class="form-input" rows="4" placeholder="Personal | 19.00&#10;Mediana | 35.00&#10;Familiar | 50.00"></textarea>
+            <small class="text-muted">One option per line: name | price. Leave empty for a single-price product.</small>
           </div>
 
           <div class="form-row">

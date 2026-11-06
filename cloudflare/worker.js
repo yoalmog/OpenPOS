@@ -14,10 +14,14 @@ function withRequestDatabase(connectionString, handler) {
     try {
       const response = await handler();
       const body = await response.arrayBuffer();
+      const headers = new Headers(response.headers);
+      for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]) {
+        headers.delete(name);
+      }
       return new Response(body, {
         status: response.status,
         statusText: response.statusText,
-        headers: response.headers
+        headers
       });
     } finally {
       await app.closeDatabase();

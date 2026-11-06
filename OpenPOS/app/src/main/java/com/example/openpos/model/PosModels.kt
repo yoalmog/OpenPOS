@@ -15,6 +15,12 @@ data class ModifierOption(
     val additionalPrice: Double = 0.0
 )
 
+data class PriceVariant(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val price: Double
+)
+
 data class Item(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
@@ -25,7 +31,8 @@ data class Item(
     val modifiers: List<ModifierOption> = emptyList(),
     val stockQuantity: Int = 100,
     val station: String = "HOT_KITCHEN",
-    val prepTimeMinutes: Int = 5
+    val prepTimeMinutes: Int = 5,
+    val priceVariants: List<PriceVariant> = emptyList()
 )
 
 enum class KitchenStation(val displayName: String) {
@@ -54,10 +61,11 @@ data class CartItem(
     val item: Item,
     var quantity: Int = 1,
     val selectedModifiers: List<ModifierOption> = emptyList(),
-    val discountPercent: Double = 0.0
+    val discountPercent: Double = 0.0,
+    val selectedPriceVariant: PriceVariant? = null
 ) {
     val unitPrice: Double
-        get() = item.price + selectedModifiers.sumOf { it.additionalPrice }
+        get() = selectedPriceVariant?.price ?: (item.price + selectedModifiers.sumOf { it.additionalPrice })
 
     val totalPrice: Double
         get() {

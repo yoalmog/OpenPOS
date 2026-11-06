@@ -933,27 +933,29 @@ async function savePgCategory(category) {
 
 async function listPgItems() {
   const result = await pgPool.query(
-    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes FROM items ORDER BY name'
+    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants FROM items ORDER BY name'
   );
   return result.rows.map(row => ({
     id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
     barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
     stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
-    prepTimeMinutes: Number(row.prep_time_minutes || 5)
+    prepTimeMinutes: Number(row.prep_time_minutes || 5),
+    priceVariants: Array.isArray(row.price_variants) ? row.price_variants : (typeof row.price_variants === "string" ? JSON.parse(row.price_variants) : [])
   }));
 }
 
 async function savePgItem(item) {
   await pgPool.query(
     `INSERT INTO items
-      (id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      (id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
      ON CONFLICT (id) DO UPDATE SET
       name=EXCLUDED.name, price=EXCLUDED.price, category_id=EXCLUDED.category_id,
       barcode=EXCLUDED.barcode, color=EXCLUDED.color, stock_quantity=EXCLUDED.stock_quantity,
-      station=EXCLUDED.station, prep_time_minutes=EXCLUDED.prep_time_minutes, updated_at=EXCLUDED.updated_at`,
+      station=EXCLUDED.station, prep_time_minutes=EXCLUDED.prep_time_minutes,
+      price_variants=EXCLUDED.price_variants, updated_at=EXCLUDED.updated_at`,
     [item.id, item.name, item.price, item.categoryId, item.barcode, item.color,
-      item.stockQuantity, item.station, item.prepTimeMinutes, Date.now()]
+      item.stockQuantity, item.station, item.prepTimeMinutes, JSON.stringify(item.priceVariants || []), Date.now()]
   );
 }
 
@@ -1033,7 +1035,11 @@ app.post('/api/items', requireApiKey, async (req, res) => {
     color: Number(item.color) || -16744448,
     stockQuantity: Number.isFinite(Number(item.stockQuantity)) ? Number(item.stockQuantity) : 100,
     station: item.station || "HOT_KITCHEN",
-    prepTimeMinutes: Number(item.prepTimeMinutes) || 5
+    prepTimeMinutes: Number(item.prepTimeMinutes) || 5,
+    priceVariants: Array.isArray(item.priceVariants) ? item.priceVariants
+      .filter(variant => variant && typeof variant.name === "string" && variant.name.trim() &&
+        Number.isFinite(Number(variant.price)) && Number(variant.price) >= 0)
+      .map(variant => ({ id: String(variant.id || `variant_${Math.random().toString(36).slice(2, 10)}`), name: variant.name.trim(), price: Number(variant.price) })) : []
   };
 
   try {

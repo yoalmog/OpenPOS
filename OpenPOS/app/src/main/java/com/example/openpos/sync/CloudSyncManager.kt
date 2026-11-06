@@ -3,6 +3,7 @@ package com.example.openpos.sync
 import com.example.openpos.database.PosDatabaseHelper
 import com.example.openpos.model.Category
 import com.example.openpos.model.Item
+import com.example.openpos.model.PriceVariant
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -175,7 +176,18 @@ class CloudSyncManager(
                                         color = iObj.optLong("color", 0xFF2E7D32),
                                         stockQuantity = iObj.optInt("stockQuantity", 100),
                                         station = iObj.optString("station", "HOT_KITCHEN"),
-                                        prepTimeMinutes = iObj.optInt("prepTimeMinutes", 5)
+                                        prepTimeMinutes = iObj.optInt("prepTimeMinutes", 5),
+                                        priceVariants = if (iObj.has("priceVariants") && !iObj.isNull("priceVariants")) {
+                                            val variants = iObj.getJSONArray("priceVariants")
+                                            (0 until variants.length()).map { variantIndex ->
+                                                val variant = variants.getJSONObject(variantIndex)
+                                                PriceVariant(
+                                                    id = variant.optString("id", "variant_$variantIndex"),
+                                                    name = variant.optString("name", ""),
+                                                    price = variant.optDouble("price", 0.0)
+                                                )
+                                            }
+                                        } else emptyList()
                                     )
                                 )
                             }

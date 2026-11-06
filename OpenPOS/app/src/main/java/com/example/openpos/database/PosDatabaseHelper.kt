@@ -12,7 +12,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
 
     companion object {
         const val DATABASE_NAME = "openpos_master.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
 
         const val TABLE_CATEGORIES = "categories"
         const val TABLE_ITEMS = "items"
@@ -43,7 +43,8 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                 color INTEGER NOT NULL,
                 stock_quantity INTEGER DEFAULT 100,
                 station TEXT DEFAULT 'HOT_KITCHEN',
-                prep_time_minutes INTEGER DEFAULT 5
+                prep_time_minutes INTEGER DEFAULT 5,
+                price_variants_json TEXT DEFAULT '[]'
             )
         """)
 
@@ -156,6 +157,12 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             } catch (_: Exception) {}
         }
 
+        if (oldVersion < 4) {
+            try {
+                db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN price_variants_json TEXT DEFAULT '[]'")
+            } catch (_: Exception) {}
+        }
+
         if (oldVersion < 3) {
             // Add Open Tickets table
             db.execSQL("""
@@ -234,6 +241,15 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                     put("stock_quantity", item.stockQuantity)
                     put("station", item.station)
                     put("prep_time_minutes", item.prepTimeMinutes)
+                    put("price_variants_json", JSONArray().apply {
+                        item.priceVariants.forEach { variant ->
+                            put(JSONObject().apply {
+                                put("id", variant.id)
+                                put("name", variant.name)
+                                put("price", variant.price)
+                            })
+                        }
+                    }.toString())
                 }
                 db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -257,6 +273,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             val stockIdx = it.getColumnIndexOrThrow("stock_quantity")
             val stationIdx = it.getColumnIndex("station")
             val prepIdx = it.getColumnIndex("prep_time_minutes")
+            val variantsIdx = it.getColumnIndex("price_variants_json")
 
             while (it.moveToNext()) {
                 val station = if (stationIdx >= 0 && !it.isNull(stationIdx)) it.getString(stationIdx) else "HOT_KITCHEN"
@@ -271,7 +288,20 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                         color = it.getLong(colorIdx),
                         stockQuantity = it.getInt(stockIdx),
                         station = station,
-                        prepTimeMinutes = prepTime
+                        prepTimeMinutes = prepTime,
+                        priceVariants = if (variantsIdx >= 0 && !it.isNull(variantsIdx)) {
+                            try {
+                                val variants = JSONArray(it.getString(variantsIdx))
+                                (0 until variants.length()).map { idx ->
+                                    val variant = variants.getJSONObject(idx)
+                                    PriceVariant(
+                                        id = variant.optString("id", "variant_$idx"),
+                                        name = variant.optString("name", ""),
+                                        price = variant.optDouble("price", 0.0)
+                                    )
+                                }
+                            } catch (_: Exception) { emptyList() }
+                        } else emptyList()
                     )
                 )
             }
@@ -291,6 +321,15 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             put("stock_quantity", item.stockQuantity)
             put("station", item.station)
             put("prep_time_minutes", item.prepTimeMinutes)
+            put("price_variants_json", JSONArray().apply {
+                item.priceVariants.forEach { variant ->
+                    put(JSONObject().apply {
+                        put("id", variant.id)
+                        put("name", variant.name)
+                        put("price", variant.price)
+                    })
+                }
+            }.toString())
         }
         db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -464,6 +503,8 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                     put("unitPrice", cartItem.unitPrice)
                     put("totalPrice", cartItem.totalPrice)
                     put("discountPercent", cartItem.discountPercent)
+                    put("priceVariantName", cartItem.selectedPriceVariant?.name ?: "")
+                    put("priceVariantPrice", cartItem.selectedPriceVariant?.price ?: JSONObject.NULL)
                     put("modifiers", JSONArray().apply {
                         cartItem.selectedModifiers.forEach { m ->
                             put(JSONObject().apply {
@@ -579,7 +620,13 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                         val cartItem = CartItem(
                             item = Item(id = itemId, name = name, price = unitPrice, categoryId = "general"),
                             quantity = qty,
-                            discountPercent = disc
+                            discountPercent = disc,
+                            selectedPriceVariant = if (obj.optString("priceVariantName").isNotBlank()) {
+                                PriceVariant(
+                                    name = obj.optString("priceVariantName"),
+                                    price = obj.optDouble("priceVariantPrice", unitPrice)
+                                )
+                            } else null
                         )
                         parsedItems.add(cartItem)
                     }
@@ -699,6 +746,8 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                 put("color", ci.item.color)
                 put("quantity", ci.quantity)
                 put("discountPercent", ci.discountPercent)
+                put("priceVariantName", ci.selectedPriceVariant?.name ?: "")
+                put("priceVariantPrice", ci.selectedPriceVariant?.price ?: JSONObject.NULL)
             })
         }
 
@@ -749,7 +798,13 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                             CartItem(
                                 item = item,
                                 quantity = obj.optInt("quantity", 1),
-                                discountPercent = obj.optDouble("discountPercent", 0.0)
+                                discountPercent = obj.optDouble("discountPercent", 0.0),
+                                selectedPriceVariant = if (obj.optString("priceVariantName").isNotBlank()) {
+                                    PriceVariant(
+                                        name = obj.optString("priceVariantName"),
+                                        price = obj.optDouble("priceVariantPrice", item.price)
+                                    )
+                                } else null
                             )
                         )
                     }

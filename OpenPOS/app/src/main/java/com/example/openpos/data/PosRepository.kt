@@ -154,10 +154,14 @@ class PosRepository private constructor(context: Context? = null) {
 
     // --- CART ACTIONS ---
 
-    fun addItemToCart(item: Item, modifiers: List<ModifierOption> = emptyList()) {
+    fun addItemToCart(
+        item: Item,
+        modifiers: List<ModifierOption> = emptyList(),
+        priceVariant: PriceVariant? = null
+    ) {
         _cart.update { current ->
             val existingIndex = current.indexOfFirst {
-                it.item.id == item.id && it.selectedModifiers == modifiers
+                it.item.id == item.id && it.selectedModifiers == modifiers && it.selectedPriceVariant == priceVariant
             }
             if (existingIndex >= 0) {
                 current.mapIndexed { index, cartItem ->
@@ -165,7 +169,7 @@ class PosRepository private constructor(context: Context? = null) {
                     else cartItem
                 }
             } else {
-                current + CartItem(item = item, selectedModifiers = modifiers, quantity = 1)
+                current + CartItem(item = item, selectedModifiers = modifiers, selectedPriceVariant = priceVariant, quantity = 1)
             }
         }
     }

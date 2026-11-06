@@ -126,6 +126,7 @@ fun PosScreen(
     val grandTotal = subtotal + taxAmount
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
@@ -159,10 +160,10 @@ fun PosScreen(
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = when (syncStatus) {
-                            SyncStatus.SYNCED -> Color(0xFFE8F5E9)
-                            SyncStatus.SYNCING -> Color(0xFFE3F2FD)
-                            SyncStatus.OFFLINE -> Color(0xFFFFF3E0)
-                            SyncStatus.ERROR -> Color(0xFFFFEBEE)
+                            SyncStatus.SYNCED -> MaterialTheme.colorScheme.tertiaryContainer
+                            SyncStatus.SYNCING -> MaterialTheme.colorScheme.primaryContainer
+                            SyncStatus.OFFLINE -> MaterialTheme.colorScheme.secondaryContainer
+                            SyncStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
                         },
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
@@ -182,10 +183,10 @@ fun PosScreen(
                                     .clip(CircleShape)
                                     .background(
                                         when (syncStatus) {
-                                            SyncStatus.SYNCED -> Color(0xFF2E7D32)
-                                            SyncStatus.SYNCING -> Color(0xFF1976D2)
-                                            SyncStatus.OFFLINE -> Color(0xFFF57C00)
-                                            SyncStatus.ERROR -> Color(0xFFD32F2F)
+                                            SyncStatus.SYNCED -> MaterialTheme.colorScheme.tertiary
+                                            SyncStatus.SYNCING -> MaterialTheme.colorScheme.primary
+                                            SyncStatus.OFFLINE -> MaterialTheme.colorScheme.secondary
+                                            SyncStatus.ERROR -> MaterialTheme.colorScheme.error
                                         }
                                     )
                             )
@@ -281,7 +282,8 @@ fun PosScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface
                 )
             )
         },
@@ -321,7 +323,7 @@ fun PosScreen(
 
                         Button(
                             onClick = { activeTab = PosTab.CART },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
                         ) {
@@ -666,11 +668,54 @@ fun CatalogView(
     onItemLongClick: (Item) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    strings.catalogTab,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    items.size.toString(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Inventory2,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        items.size.toString(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
         // Category chips row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             LazyRow(
@@ -912,7 +957,7 @@ fun CartView(
                 Button(
                     onClick = onCheckout,
                     modifier = Modifier.weight(1.5f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.Payment, contentDescription = null)
@@ -933,22 +978,26 @@ fun ItemCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {}
 ) {
+    val cardShape = RoundedCornerShape(18.dp)
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(115.dp)
+            .height(142.dp)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             ),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = cardShape,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(10.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
@@ -956,40 +1005,43 @@ fun ItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.Top
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .padding(top = 4.dp)
+                            .size(11.dp)
                             .clip(CircleShape)
                             .background(Color(item.color))
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         item.name,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
                 Surface(
-                    shape = RoundedCornerShape(4.dp),
+                    shape = RoundedCornerShape(9.dp),
                     color = when {
-                        item.stockQuantity <= 0 -> Color(0xFFFFEBEE)
-                        item.stockQuantity <= 5 -> Color(0xFFFFF3E0)
+                        item.stockQuantity <= 0 -> MaterialTheme.colorScheme.errorContainer
+                        item.stockQuantity <= 5 -> MaterialTheme.colorScheme.tertiaryContainer
                         else -> MaterialTheme.colorScheme.surfaceVariant
                     }
                 ) {
                     Text(
-                        text = if (item.stockQuantity <= 0) "0" else "${item.stockQuantity}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                        text = item.stockQuantity.coerceAtLeast(0).toString(),
+                        style = MaterialTheme.typography.labelLarge,
                         color = when {
-                            item.stockQuantity <= 0 -> Color(0xFFD32F2F)
-                            item.stockQuantity <= 5 -> Color(0xFFE65100)
+                            item.stockQuantity <= 0 -> MaterialTheme.colorScheme.onErrorContainer
+                            item.stockQuantity <= 5 -> MaterialTheme.colorScheme.onTertiaryContainer
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -997,22 +1049,34 @@ fun ItemCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    if (item.priceVariants.isNotEmpty()) {
-                        val prices = item.priceVariants.map { it.price }
-                        "${currencyFormat.format(prices.minOrNull() ?: item.price)} – ${currencyFormat.format(prices.maxOrNull() ?: item.price)}"
-                    } else currencyFormat.format(item.price),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 15.sp
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        if (item.priceVariants.isNotEmpty()) {
+                            val prices = item.priceVariants.map { it.price }
+                            "${currencyFormat.format(prices.minOrNull() ?: item.price)} – ${currencyFormat.format(prices.maxOrNull() ?: item.price)}"
+                        } else currencyFormat.format(item.price),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
                 if (item.modifiers.isNotEmpty()) {
                     Text(
                         extraLabel,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.secondary
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.AddCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
@@ -1028,9 +1092,9 @@ fun CartItemRow(
     onMinus: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp
+        tonalElevation = 2.dp
     ) {
         Row(
             modifier = Modifier

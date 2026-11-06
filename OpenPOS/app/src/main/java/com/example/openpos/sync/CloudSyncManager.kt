@@ -25,7 +25,7 @@ enum class SyncStatus(val label: String) {
 
 class CloudSyncManager(
     private val dbHelper: PosDatabaseHelper,
-    var serverUrl: String = "http://10.0.2.2:3000",
+    var serverUrl: String = "https://openpos.b4u2store.workers.dev",
     var accessTokenProvider: (suspend () -> String?)? = null
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())

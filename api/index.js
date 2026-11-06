@@ -348,7 +348,7 @@ async function resetDatabase(connectionString) {
         connectionString,
         ssl: process.env.PG_NO_SSL ? false : { rejectUnauthorized: false },
         connectionTimeoutMillis: 10000,
-        query_timeout: 15000
+        query_timeout: 30000
       });
       await client.connect();
       pgPool = client;
@@ -441,34 +441,14 @@ function saveFileData(data) {
   }
 }
 
-// Production migrations own schema changes. The Worker must never attempt DDL.
-// Keep this check to a minimal live round-trip; actual repository queries verify
-// their required tables and return a persistent-storage error if a migration is missing.
+// Production schema is managed exclusively by migrations. Do not run DDL or
+// an extra round-trip here: each real repository query below verifies the table
+// it needs, while this gate only confirms that a request-scoped DB client exists.
 let tablesInitialized = false;
 let tablesInitializationPromise = null;
 async function initPgTables() {
-  if (!pgPool || tablesInitialized) return;
-  if (tablesInitializationPromise) return tablesInitializationPromise;
-
-  tablesInitializationPromise = (async () => {
-    try {
-      await pgPool.query("SELECT 1 AS connected");
-      tablesInitialized = true;
-      console.log("[DB] PostgreSQL connection readiness verified.");
-    } catch (err) {
-      console.error("[DB] PostgreSQL connection readiness check failed:", {
-        code: err?.code || null,
-        message: err?.message || "Unknown database error"
-      });
-      throw err;
-    }
-  })();
-
-  try {
-    await tablesInitializationPromise;
-  } finally {
-    if (!tablesInitialized) tablesInitializationPromise = null;
-  }
+  if (!pgPool) return;
+  tablesInitialized = true;
 }
 
 // Middleware: CORS & Body Parser

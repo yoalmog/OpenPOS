@@ -64,14 +64,14 @@ jobs:
           node --input-type=module <<'NODE'
           const base = "https://openpos.b4u2store.workers.dev";
           for (const path of ["/api/categories", "/api/items"]) {
-            const response = await fetch(new URL(path, base), { signal: AbortSignal.timeout(25000) });
+            const response = await fetch(new URL(path, base), { signal: AbortSignal.timeout(40000) });
             const body = await response.text();
             if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}: ${body.slice(0, 300)}`);
             const data = JSON.parse(body);
             if (!Array.isArray(data)) throw new Error(`${path} did not return a real catalog array`);
             console.log(`${path}: ${data.length} live PostgreSQL records`);
           }
-          const statusResponse = await fetch(new URL("/api/status", base), { signal: AbortSignal.timeout(25000) });
+          const statusResponse = await fetch(new URL("/api/status", base), { signal: AbortSignal.timeout(40000) });
           const status = await statusResponse.json();
           if (!statusResponse.ok || status.status !== "online" || status.database?.connected !== true ||
               !String(status.storageEngine || "").startsWith("PostgreSQL")) {

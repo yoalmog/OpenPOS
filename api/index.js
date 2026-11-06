@@ -609,7 +609,7 @@ app.use("/api", async (req, res, next) => {
     }
     return next();
   } catch (error) {
-    console.error("[DB] Cloudflare request gate failed:", error?.code || "UNKNOWN");
+    console.error("[DB] Cloudflare request gate failed:", { code: error?.code || null, message: error?.message || "Unknown database error" });
     return res.status(503).json({
       error: "Persistent database unavailable.",
       message: "The PostgreSQL schema could not be initialized."

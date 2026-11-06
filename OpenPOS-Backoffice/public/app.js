@@ -707,6 +707,9 @@ document.addEventListener('DOMContentLoaded', () => {
             : `${escapeHtml(state.storeInfo.currency || 'S/')} ${Number(item.price).toFixed(2)}`}</td>
           <td>${item.stockQuantity}</td>
           <td class="text-right">
+            <button class="btn btn-outline btn-sm" onclick="window.editProduct('${item.id}')" title="Edit product" aria-label="Edit product">
+              <i class="fa-solid fa-pen"></i> Edit
+            </button>
             <button class="btn btn-icon btn-sm text-danger" onclick="window.deleteProduct('${item.id}')" title="Delete">
               <i class="fa-solid fa-trash-can"></i>
             </button>
@@ -715,6 +718,27 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     }).join('');
   }
+
+  window.editProduct = function(id) {
+    const item = state.items.find(product => String(product.id) === String(id));
+    if (!item) {
+      showToast('Product not found. Refresh the catalog and try again.', 'error');
+      return;
+    }
+    document.getElementById('productModalTitle').textContent = 'Edit Product';
+    document.getElementById('modalProductId').value = item.id;
+    document.getElementById('modalProductName').value = item.name || '';
+    document.getElementById('modalProductPrice').value = Number(item.price || 0).toFixed(2);
+    document.getElementById('modalProductStock').value = Number(item.stockQuantity ?? 0);
+    document.getElementById('modalProductCategory').value = item.categoryId || 'general';
+    document.getElementById('modalProductStation').value = item.station || 'HOT_KITCHEN';
+    document.getElementById('modalProductPrepTime').value = Number(item.prepTimeMinutes || 5);
+    document.getElementById('modalProductBarcode').value = item.barcode || '';
+    document.getElementById('modalProductVariants').value = (item.priceVariants || [])
+      .map(variant => `${variant.name} | ${Number(variant.price).toFixed(2)}`).join('\\n');
+    state.selectedProductColor = item.color || '#2E7D32';
+    openModal(productModal);
+  };
 
   window.deleteProduct = async function(id) {
     if (!confirm('Are you sure you want to remove this product?')) return;
@@ -834,7 +858,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------
   function setupModals() {
     // Open modal buttons
-    document.getElementById('openAddProductModalBtn')?.addEventListener('click', () => openModal(productModal));
+    document.getElementById('openAddProductModalBtn')?.addEventListener('click', () => {
+      document.getElementById('productForm')?.reset();
+      document.getElementById('productModalTitle').textContent = 'Add New Product';
+      document.getElementById('modalProductId').value = '';
+      document.getElementById('modalProductStock').value = '100';
+      document.getElementById('modalProductPrepTime').value = '5';
+      document.getElementById('modalProductVariants').value = '';
+      state.selectedProductColor = '#2E7D32';
+      openModal(productModal);
+    });
     document.getElementById('openAddCategoryModalBtn')?.addEventListener('click', () => openModal(categoryModal));
     document.getElementById('openAddIngredientModalBtn')?.addEventListener('click', () => openModal(ingredientModal));
     document.getElementById('openReportWasteModalBtn')?.addEventListener('click', () => openModal(wasteModal));
@@ -852,9 +885,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // Product Form Submit
     document.getElementById('productForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const variantLines = document.getElementById('modalProductVariants').value
+        .split('\\n').map(line => line.trim()).filter(Boolean);
+      const priceVariants = [];
+      for (const line of variantLines) {
+        const parts = line.split('|');
+        const name = (parts[0] || '').trim();
+        const price = Number((parts[1] || '').trim());
+        if (!name || parts.length < 2 || !Number.isFinite(price) || price < 0) {
+          showToast(`Invalid size price: "${line}". Use "Size | Price", one per line.`, 'error');
+          return;
+        }
+        priceVariants.push({ name, price });
+      }
+      const productId = document.getElementById('modalProductId').value.trim();
       const payload = {
+        ...(productId ? { id: productId } : {}),
         name: document.getElementById('modalProductName').value,
         price: parseFloat(document.getElementById('modalProductPrice').value),
+        priceVariants,
         stockQuantity: parseInt(document.getElementById('modalProductStock').value, 10),
         categoryId: document.getElementById('modalProductCategory').value,
         station: document.getElementById('modalProductStation').value,
@@ -869,13 +918,14 @@ document.addEventListener('DOMContentLoaded', () => {
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        if (data.success) {
-          closeModal(productModal);
-          showToast('Product saved successfully', 'success');
-          fetchItems();
-          fetchRecipeProfitability();
-        }
-      } catch (_) {}
+        if (!res.ok || !data.success) throw new Error(data.error || 'Could not save product');
+        closeModal(productModal);
+        showToast(productId ? 'Product updated successfully' : 'Product created successfully', 'success');
+        fetchItems();
+        fetchRecipeProfitability();
+      } catch (error) {
+        showToast(error.message || 'Could not save product', 'error');
+      }
     });
 
     // Category Form Submit

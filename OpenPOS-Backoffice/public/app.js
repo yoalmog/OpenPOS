@@ -702,7 +702,9 @@ document.addEventListener('DOMContentLoaded', () => {
           <td>${escapeHtml(cat?.name || 'General')}</td>
           <td><span class="badge badge-info">${escapeHtml(item.station?.replace('_', ' ') || 'HOT KITCHEN')}</span></td>
           <td>${item.prepTimeMinutes || 5} min</td>
-          <td>$${Number(item.price).toFixed(2)}</td>
+          <td>${Array.isArray(item.priceVariants) && item.priceVariants.length
+            ? item.priceVariants.map(v => `${escapeHtml(v.name)}: ${escapeHtml(state.storeInfo.currency || 'S/')} ${Number(v.price).toFixed(2)}`).join('<br>')
+            : `${escapeHtml(state.storeInfo.currency || 'S/')} ${Number(item.price).toFixed(2)}`}</td>
           <td>${item.stockQuantity}</td>
           <td class="text-right">
             <button class="btn btn-icon btn-sm text-danger" onclick="window.deleteProduct('${item.id}')" title="Delete">

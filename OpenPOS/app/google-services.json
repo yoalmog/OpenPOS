@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "897391226078-3mt5no8p6chf3fnd2a88e2qo47o4su6u.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.openpos.app",
+            "certificate_hash": "dad485b74e7fcb448905ba8340e5bb86eacb48c8"
+          }
+        },
+        {
           "client_id": "897391226078-lp11dq0uajtrb8n3a175qhbdp6sit8v0.apps.googleusercontent.com",
           "client_type": 3
         }

@@ -574,55 +574,86 @@
 
         <!-- 12. SETTINGS TAB -->
         <section id="tab-settings" class="tab-pane">
-          <div class="settings-grid">
+          <div class="settings-intro">
+            <div>
+              <span class="settings-eyebrow">STORE CONTROL CENTER</span>
+              <h2>Back Office Settings</h2>
+              <p>Manage your restaurant identity, local pricing rules and connected POS environment.</p>
+            </div>
+            <span class="settings-save-state" id="settingsSaveState" role="status" aria-live="polite">Changes are saved to the cloud</span>
+          </div>
+
+          <div class="settings-grid settings-grid-upgraded">
             <div class="card settings-card">
               <div class="card-header">
-                <h3><i class="fa-solid fa-store"></i> Store Profile Settings</h3>
+                <h3><i class="fa-solid fa-store"></i> Store Profile</h3>
+                <span class="settings-card-caption">Business identity</span>
               </div>
               <form id="storeSettingsForm" class="settings-form">
                 <div class="form-group">
-                  <label for="settingStoreName">Store / Restaurant Name</label>
-                  <input type="text" id="settingStoreName" class="form-input" required>
+                  <label for="settingStoreName">Restaurant name</label>
+                  <input type="text" id="settingStoreName" class="form-input" required maxlength="120" autocomplete="organization">
                 </div>
-
                 <div class="form-group">
-                  <label for="settingCurrency">Currency Symbol</label>
-                  <input type="text" id="settingCurrency" class="form-input" style="max-width: 100px;" required>
+                  <label for="settingAddress">Business address</label>
+                  <input type="text" id="settingAddress" class="form-input" maxlength="240" autocomplete="street-address" placeholder="Street, city, country">
                 </div>
-
-                <div class="form-group">
-                  <label for="settingTaxRate">Default Tax / VAT Rate (%)</label>
-                  <input type="number" id="settingTaxRate" class="form-input" step="0.1" style="max-width: 120px;" required>
+                <div class="settings-form-foot">
+                  <span class="settings-help">Shown across your Back Office and customer storefront.</span>
                 </div>
-
-                <div class="form-group">
-                  <label for="settingAddress">Location Address</label>
-                  <input type="text" id="settingAddress" class="form-input">
-                </div>
-
-                <button type="submit" class="btn btn-primary">
-                  <i class="fa-solid fa-floppy-disk"></i> Save Profile Settings
+                <button type="submit" class="btn btn-primary" id="saveStoreSettingsBtn">
+                  <i class="fa-solid fa-floppy-disk"></i> Save store profile
                 </button>
               </form>
             </div>
 
             <div class="card settings-card">
               <div class="card-header">
-                <h3><i class="fa-solid fa-cloud-arrow-up"></i> Mobile POS Synchronization</h3>
+                <h3><i class="fa-solid fa-receipt"></i> Currency & Tax</h3>
+                <span class="settings-card-caption">Checkout defaults</span>
+              </div>
+              <form id="storeSettingsFormTax" class="settings-form settings-tax-form">
+                <div class="form-group">
+                  <label for="settingCurrency">Currency symbol</label>
+                  <input type="text" id="settingCurrency" class="form-input" required maxlength="8" style="max-width: 140px;" placeholder="S/">
+                  <span class="settings-help">Used to display prices and totals.</span>
+                </div>
+                <div class="form-group">
+                  <label for="settingTaxRate">Default tax / VAT rate (%)</label>
+                  <div class="settings-tax-input">
+                    <input type="number" id="settingTaxRate" class="form-input" min="0" max="100" step="0.01" required inputmode="decimal">
+                    <span>%</span>
+                  </div>
+                  <span class="settings-help">Applied to new customer storefront orders. Confirm the correct rate for your tax regime.</span>
+                </div>
+                <div class="settings-tax-preview" aria-live="polite">
+                  <span>Tax preview on S/ 100.00</span>
+                  <strong id="settingTaxPreview">S/ 18.00</strong>
+                </div>
+                <button type="submit" class="btn btn-primary" id="saveTaxSettingsBtn">
+                  <i class="fa-solid fa-calculator"></i> Save currency & tax
+                </button>
+              </form>
+            </div>
+
+            <div class="card settings-card settings-connection-card">
+              <div class="card-header">
+                <h3><i class="fa-solid fa-cloud"></i> Cloud & Device Connection</h3>
+                <span class="settings-status-pill" id="settingsDbStatus"><span class="settings-status-dot"></span> Checking connection</span>
               </div>
               <div class="sync-instructions">
-                <p>To connect your Samsung or Android POS device to this Back Office:</p>
+                <p class="settings-connection-copy">Use this secure Production address when connecting Android POS terminals to this Back Office.</p>
                 <div class="code-box">
-                  <span class="code-label">Back Office Sync URL:</span>
-                  <code id="displaySyncUrl">http://localhost:3000</code>
-                  <button class="btn btn-sm btn-outline copy-btn" id="copySyncUrlBtn"><i class="fa-solid fa-copy"></i> Copy</button>
+                  <span class="code-label">Production Sync URL</span>
+                  <code id="displaySyncUrl">https://openpos.b4u2store.workers.dev</code>
+                  <button class="btn btn-sm btn-outline copy-btn" id="copySyncUrlBtn" type="button"><i class="fa-solid fa-copy"></i> Copy</button>
                 </div>
-                <ul>
-                  <li>Open the OpenPOS app on your Android device.</li>
-                  <li>Tap the <strong>Settings (Gear)</strong> icon in the top right.</li>
-                  <li>Paste this URL into <strong>Back Office URL</strong> and tap <strong>Save Settings</strong>.</li>
-                  <li>Tap <strong>Sync Now</strong> to instantly synchronize catalog and sales in real-time!</li>
-                </ul>
+                <div class="settings-connection-meta">
+                  <div><span>Storage engine</span><strong id="settingsStorageEngine">Checking…</strong></div>
+                  <div><span>Database</span><strong id="settingsDatabaseState">Checking…</strong></div>
+                  <div><span>Catalog items</span><strong id="settingsCatalogCount">—</strong></div>
+                </div>
+                <button class="btn btn-outline btn-sm" id="settingsRefreshStatusBtn" type="button"><i class="fa-solid fa-rotate"></i> Refresh connection status</button>
               </div>
             </div>
 
@@ -631,13 +662,13 @@
                 <h3><i class="fa-solid fa-triangle-exclamation"></i> Danger Zone</h3>
               </div>
               <div class="danger-body">
-                <p>Reset and wipe all products, categories, and sales receipts from the online back office. This cannot be undone.</p>
-                <div style="margin: 1rem 0; max-width: 280px;">
-                  <label for="dangerManagerPin" style="display: block; font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.25rem;">Enter Manager PIN to authorize:</label>
-                  <input type="password" id="dangerManagerPin" class="form-input" placeholder="Manager PIN (default: 8888)">
+                <p><strong>Reset store data</strong> permanently clears products, categories and sales receipts. This action cannot be undone. It does not repair connection or tax configuration issues.</p>
+                <div class="settings-danger-confirm">
+                  <label for="dangerManagerPin">Manager PIN authorization</label>
+                  <input type="password" id="dangerManagerPin" class="form-input" placeholder="Enter manager PIN" autocomplete="current-password">
                 </div>
-                <button class="btn btn-danger" id="resetAllDataBtn">
-                  <i class="fa-solid fa-trash-can"></i> Reset & Clear All Data
+                <button class="btn btn-danger" id="resetAllDataBtn" type="button">
+                  <i class="fa-solid fa-trash-can"></i> Reset & clear store data
                 </button>
               </div>
             </div>

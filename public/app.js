@@ -126,6 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (tabId === 'waste') fetchWaste();
       else if (tabId === 'forecast') fetchForecast();
       else if (tabId === 'safety') fetchSafety();
+      else if (tabId === 'settings') fetchStatus();
     }
 
     navItems.forEach(item => {
@@ -196,11 +197,25 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/status');
       const data = await res.json();
       state.storeInfo = {
-        name: data.storeName || 'Artisan Cafe & Bistro',
-        currency: data.currency || '$',
-        taxRate: data.taxRate || 17.0
+        name: data.storeName || 'OpenPOS Store',
+        currency: data.currency || 'S/',
+        taxRate: data.taxRate !== null && data.taxRate !== undefined && Number.isFinite(Number(data.taxRate)) ? Number(data.taxRate) : null,
+        address: data.storeAddress || ''
       };
       if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
+      const dbStatus = document.getElementById('settingsDbStatus');
+      const storageEngine = document.getElementById('settingsStorageEngine');
+      const databaseState = document.getElementById('settingsDatabaseState');
+      const catalogCount = document.getElementById('settingsCatalogCount');
+      const connected = data.database?.connected === true;
+      if (dbStatus) {
+        dbStatus.classList.toggle('is-online', connected);
+        dbStatus.classList.toggle('is-offline', !connected);
+        dbStatus.innerHTML = '<span class="settings-status-dot"></span>' + (connected ? 'Connected' : 'Unavailable');
+      }
+      if (storageEngine) storageEngine.textContent = data.storageEngine || 'Unknown';
+      if (databaseState) databaseState.textContent = connected ? 'Connected' : 'Not connected';
+      if (catalogCount) catalogCount.textContent = String(data.counts?.items ?? '—');
       populateSettingsForm();
     } catch (err) {
       console.error('Error fetching status:', err);
@@ -989,35 +1004,72 @@ document.addEventListener('DOMContentLoaded', () => {
     const currInput = document.getElementById('settingCurrency');
     const taxInput = document.getElementById('settingTaxRate');
     const addrInput = document.getElementById('settingAddress');
-
-    if (nameInput) nameInput.value = state.storeInfo.name;
-    if (currInput) currInput.value = state.storeInfo.currency;
-    if (taxInput) taxInput.value = state.storeInfo.taxRate;
+    if (nameInput) nameInput.value = state.storeInfo.name || '';
+    if (currInput) currInput.value = state.storeInfo.currency || '';
+    if (taxInput) taxInput.value = state.storeInfo.taxRate ?? '';
     if (addrInput) addrInput.value = state.storeInfo.address || '';
+    updateTaxPreview();
   }
 
-  document.getElementById('storeSettingsForm')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const payload = {
-      name: document.getElementById('settingStoreName').value,
-      currency: document.getElementById('settingCurrency').value,
-      taxRate: document.getElementById('settingTaxRate').value,
-      address: document.getElementById('settingAddress').value
-    };
+  function updateTaxPreview() {
+    const preview = document.getElementById('settingTaxPreview');
+    const rate = Number(document.getElementById('settingTaxRate')?.value);
+    const currency = document.getElementById('settingCurrency')?.value || state.storeInfo.currency || '';
+    if (preview) preview.textContent = Number.isFinite(rate) ? currency + ' ' + (100 * rate / 100).toFixed(2) : '—';
+  }
 
+  async function saveStoreSettings(payload, buttonId, successMessage) {
+    const button = document.getElementById(buttonId);
+    const original = button?.innerHTML;
+    if (button) { button.disabled = true; button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…'; }
+    const saveState = document.getElementById('settingsSaveState');
+    if (saveState) saveState.textContent = 'Saving changes…';
     try {
       const res = await fetch('/api/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
-      if (data.success) {
-        state.storeInfo = data.storeInfo;
-        if (storeNameLabel) storeNameLabel.textContent = data.storeInfo.name;
-        showToast('Store settings saved!', 'success');
-      }
-    } catch (_) {}
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Settings could not be saved.');
+      state.storeInfo = { ...state.storeInfo, ...data.storeInfo };
+      if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
+      populateSettingsForm();
+      if (saveState) saveState.textContent = 'Saved to cloud just now';
+      showToast(successMessage, 'success');
+      return true;
+    } catch (error) {
+      if (saveState) saveState.textContent = 'Save failed — changes were not applied';
+      showToast(error.message || 'Settings could not be saved.', 'error');
+      return false;
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
+  document.getElementById('storeSettingsForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('settingStoreName').value.trim();
+    const address = document.getElementById('settingAddress').value.trim();
+    if (!name) return showToast('Enter a restaurant name.', 'error');
+    await saveStoreSettings({ name, address }, 'saveStoreSettingsBtn', 'Store profile saved.');
+  });
+
+  document.getElementById('storeSettingsFormTax')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currency = document.getElementById('settingCurrency').value.trim();
+    const taxRate = Number(document.getElementById('settingTaxRate').value);
+    if (!currency || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) {
+      return showToast('Enter a currency symbol and a tax rate between 0 and 100%.', 'error');
+    }
+    await saveStoreSettings({ currency, taxRate }, 'saveTaxSettingsBtn', 'Currency and tax settings saved.');
+  });
+
+  document.getElementById('settingTaxRate')?.addEventListener('input', updateTaxPreview);
+  document.getElementById('settingCurrency')?.addEventListener('input', updateTaxPreview);
+  document.getElementById('settingsRefreshStatusBtn')?.addEventListener('click', async () => {
+    await fetchStatus();
+    showToast('Connection status refreshed.', 'success');
   });
 
   // Danger Reset

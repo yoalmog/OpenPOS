@@ -805,6 +805,7 @@ app.get('/api/status', async (req, res) => {
     version: "3.5.0",
     timestamp: Date.now(),
     storeName: storeInfo?.name || null,
+    storeAddress: storeInfo?.address || null,
     currency: storeInfo?.currency || null,
     taxRate: storeInfo?.taxRate ?? null,
     counts

@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
         name: data.storeName || 'OpenPOS Store',
         currency: data.currency || 'S/',
         taxRate: data.taxRate !== null && data.taxRate !== undefined && Number.isFinite(Number(data.taxRate)) ? Number(data.taxRate) : null,
-        address: data.address || ''
+        address: data.storeAddress || ''
       };
       if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
       const dbStatus = document.getElementById('settingsDbStatus');

@@ -12,11 +12,11 @@
   <link rel="stylesheet" href="/enterprise-v2.css?v=enterprise-v2">
 </head>
 <body class="dark-theme">
-  <div class="app-container">
+  <div class="app-container" style="display:none;">
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <div class="logo-icon">
+        <div class="logo-icon" style="margin-left: 0px; padding-left: 15px; padding-top: 11px;">
           <i class="fa-solid fa-cash-register"></i>
         </div>
         <div class="brand-info">
@@ -73,7 +73,7 @@
         </a>
         <a href="#forecast" class="nav-item" data-tab="forecast">
           <i class="fa-solid fa-users-gear"></i>
-          <span>Staffing & Forecast</span>
+          <span>Staffing &amp; Payroll</span>
         </a>
         <a href="#safety" class="nav-item" data-tab="safety">
           <i class="fa-solid fa-shield-halved"></i>
@@ -124,6 +124,11 @@
           </button>
           <button id="themeToggleBtn" class="btn btn-icon" title="Toggle Theme">
             <i class="fa-solid fa-sun"></i>
+          </button>
+          <span id="authUserEmail" class="store-badge" style="font-size:0.78rem; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="Signed-in account"></span>
+          <button id="logoutBtn" class="btn btn-outline btn-sm" type="button" title="Sign out of OpenPOS" style="display:none;">
+            <i class="fa-solid fa-right-from-bracket"></i>
+            <span>Sign Out</span>
           </button>
         </div>
       </header>
@@ -282,6 +287,11 @@
               <select id="categoryFilterSelect" class="form-select">
                 <option value="">All Categories</option>
               </select>
+              <button type="button" class="btn btn-outline btn-sm low-stock-filter-btn" id="lowStockFilterBtn" aria-pressed="false" title="Show only items below minimum stock threshold">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>Low Stock</span>
+                <span class="low-stock-count-pill" id="lowStockCountBadge">0</span>
+              </button>
               <a href="/api/export/items" target="_blank" class="btn btn-outline btn-sm">
                 <i class="fa-solid fa-file-csv"></i> Export CSV
               </a>
@@ -291,11 +301,40 @@
             </div>
           </div>
 
+          <div class="card bulk-action-bar" id="productsBulkBar" style="display:none;" role="region" aria-label="Bulk catalog actions">
+            <div class="bulk-action-summary">
+              <i class="fa-solid fa-square-check"></i>
+              <span><strong id="bulkSelectedCount">0</strong> selected</span>
+            </div>
+            <div class="bulk-action-controls">
+              <select id="bulkCategorySelect" class="form-select form-select-sm" aria-label="Bulk target category">
+                <option value="">Keep Category</option>
+              </select>
+              <select id="bulkStationSelect" class="form-select form-select-sm" aria-label="Bulk target kitchen station">
+                <option value="">Keep Kitchen Station</option>
+                <option value="COFFEE_BAR">Coffee Bar</option>
+                <option value="HOT_KITCHEN">Hot Kitchen</option>
+                <option value="SALADS">Salads &amp; Cold</option>
+                <option value="DESSERTS">Bakery &amp; Desserts</option>
+                <option value="BAR">Bar &amp; Drinks</option>
+              </select>
+              <button type="button" class="btn btn-primary btn-sm" id="applyBulkUpdateBtn">
+                <i class="fa-solid fa-bolt"></i> Apply Bulk Update
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="clearBulkSelectionBtn">
+                Clear
+              </button>
+            </div>
+          </div>
+
           <div class="card table-card">
             <div class="table-responsive">
               <table class="data-table">
                 <thead>
                   <tr>
+                    <th style="width:42px;">
+                      <input type="checkbox" id="selectAllProductsCheckbox" aria-label="Select all visible products">
+                    </th>
                     <th>Color</th>
                     <th>Product Name</th>
                     <th>Category</th>
@@ -307,7 +346,7 @@
                   </tr>
                 </thead>
                 <tbody id="productsTableBody">
-                  <tr><td colspan="8" class="text-center text-muted">Loading catalog...</td></tr>
+                  <tr><td colspan="9" class="text-center text-muted">Loading catalog...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -338,7 +377,7 @@
                     <th>Gross Margin ($)</th>
                     <th>Food Cost %</th>
                     <th>Health Status</th>
-                    <th class="text-right">Recipe BOM</th>
+                    <th class="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="recipeProfitabilityTableBody">
@@ -351,14 +390,19 @@
 
         <!-- 6. RAW INGREDIENTS TAB -->
         <section id="tab-ingredients" class="tab-pane">
-          <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center;">
+          <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
             <div>
               <h3 style="margin:0; font-size:1.1rem;"><i class="fa-solid fa-wheat-awn"></i> Raw Ingredients & Bulk Stock</h3>
               <span style="font-size:0.8rem; color:var(--text-muted);">Coffee beans, milk, flour, produce, proteins and consumables</span>
             </div>
-            <button class="btn btn-primary" id="openAddIngredientModalBtn">
-              <i class="fa-solid fa-plus"></i> Add Ingredient
-            </button>
+            <div class="filter-actions">
+              <button type="button" class="btn btn-outline" id="openIngredientHistoryBtn">
+                <i class="fa-solid fa-chart-line"></i> View History
+              </button>
+              <button class="btn btn-primary" id="openAddIngredientModalBtn">
+                <i class="fa-solid fa-plus"></i> Add Ingredient
+              </button>
+            </div>
           </div>
 
           <div class="card table-card">
@@ -372,7 +416,7 @@
                     <th>Current Stock</th>
                     <th>Min Threshold</th>
                     <th>Status</th>
-                    <th class="text-right">Adjust Stock</th>
+                    <th class="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="ingredientsTableBody">
@@ -454,43 +498,353 @@
           </div>
         </section>
 
-        <!-- 9. STAFFING & FORECAST TAB -->
+        <!-- 9. STAFFING, WORKFORCE & PERU PAYROLL TAB -->
         <section id="tab-forecast" class="tab-pane">
-          <div class="toolbar">
+          <div class="wf-header-bar">
             <div>
-              <h3 style="margin:0; font-size:1.1rem;"><i class="fa-solid fa-users-gear"></i> Predictive Staffing & Shift Demand</h3>
-              <span style="font-size:0.8rem; color:var(--text-muted);">AI/Algorithmic hourly order forecast and station labor recommendations</span>
+              <h3 id="wfMainHeading" style="margin:0; font-size:1.15rem;"><i class="fa-solid fa-users-gear"></i> Workforce Management &amp; Peru Payroll Control Center</h3>
+              <span id="wfMainSubtitle" style="font-size:0.8rem; color:var(--text-muted);">Multi-branch scheduling, PIN attendance, labor analytics &amp; Peru-compliant payroll (PEN S/ • America/Lima)</span>
             </div>
-          </div>
-
-          <div class="kpi-grid" style="margin-bottom:1.5rem;">
-            <div class="kpi-card">
-              <div class="kpi-icon orders"><i class="fa-solid fa-chart-line"></i></div>
-              <div class="kpi-details">
-                <span class="kpi-label">Projected Daily Orders</span>
-                <h3 class="kpi-value" id="forecastTotalOrders">142</h3>
-                <span class="kpi-trend positive">Peak at 12:00</span>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-primary btn-sm" id="wfOpenPinKioskBtn">
+                <i class="fa-solid fa-key"></i> <span data-wf-i18n="pinKiosk">PIN Clock Kiosk</span>
+              </button>
+              <div class="wf-lang-switch" role="group" aria-label="Language switch">
+                <button type="button" class="wf-lang-btn active" data-wf-lang="en">EN</button>
+                <button type="button" class="wf-lang-btn" data-wf-lang="es">ES</button>
               </div>
             </div>
           </div>
 
-          <div class="card table-card">
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Hour Window</th>
-                    <th>Predicted Order Volume</th>
-                    <th>Recommended Staff Total</th>
-                    <th>Baristas</th>
-                    <th>Kitchen Cooks</th>
-                    <th>Floor / Cashier</th>
-                  </tr>
-                </thead>
-                <tbody id="forecastTableBody">
-                  <tr><td colspan="6" class="text-center text-muted">Loading staffing forecast...</td></tr>
-                </tbody>
-              </table>
+          <div class="wf-subnav" id="wfSubNav">
+            <button type="button" class="wf-subtab-btn active" data-wf-pane="overview"><i class="fa-solid fa-gauge-high"></i> <span data-wf-i18n="tabOverview">Overview &amp; Forecast</span></button>
+            <button type="button" class="wf-subtab-btn" data-wf-pane="employees"><i class="fa-solid fa-id-card"></i> <span data-wf-i18n="tabEmployees">Employees &amp; Branches</span></button>
+            <button type="button" class="wf-subtab-btn" data-wf-pane="schedules"><i class="fa-solid fa-calendar-week"></i> <span data-wf-i18n="tabSchedules">Shifts &amp; Attendance</span></button>
+            <button type="button" class="wf-subtab-btn" data-wf-pane="leaves"><i class="fa-solid fa-plane-departure"></i> <span data-wf-i18n="tabLeaves">Leave &amp; Swaps</span></button>
+            <button type="button" class="wf-subtab-btn" data-wf-pane="payroll"><i class="fa-solid fa-file-invoice-dollar"></i> <span data-wf-i18n="tabPayroll">Peru Payroll &amp; Boletas</span></button>
+            <button type="button" class="wf-subtab-btn" data-wf-pane="selfservice" id="wfSelfServiceTabBtn" style="display:none;"><i class="fa-solid fa-user-check"></i> <span data-wf-i18n="tabMyPortal">My Portal</span></button>
+          </div>
+
+          <div id="wfAccountantAlerts"></div>
+
+          <!-- Sub-pane 1: Overview & Forecast -->
+          <div class="wf-subpane active" id="wf-pane-overview">
+            <div class="kpi-grid" style="margin-bottom:1.25rem;">
+              <div class="kpi-card">
+                <div class="kpi-icon orders"><i class="fa-solid fa-chart-line"></i></div>
+                <div class="kpi-details">
+                  <span class="kpi-label" data-wf-i18n="kpiPredictedOrders">Projected Daily Orders</span>
+                  <h3 class="kpi-value" id="forecastTotalOrders">0</h3>
+                  <span class="kpi-trend positive" id="wfForecastPeakLabel">7-day sales model</span>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon revenue"><i class="fa-solid fa-money-bill-wave"></i></div>
+                <div class="kpi-details">
+                  <span class="kpi-label" data-wf-i18n="kpiMonthlyPayroll">Monthly Payroll (PEN)</span>
+                  <h3 class="kpi-value" id="wfKpiMonthlyPayroll">S/ 0.00</h3>
+                  <span class="kpi-trend" id="wfKpiEmployerContrib">EsSalud/EPS: S/ 0.00</span>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon ticket"><i class="fa-solid fa-percent"></i></div>
+                <div class="kpi-details">
+                  <span class="kpi-label" data-wf-i18n="kpiLaborPct">Labor Cost % vs Sales</span>
+                  <h3 class="kpi-value" id="wfKpiLaborPct">0.0%</h3>
+                  <span class="kpi-trend" id="wfKpiSalesPerHour">Sales/Hr: S/ 0.00</span>
+                </div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-icon waste"><i class="fa-solid fa-clipboard-check"></i></div>
+                <div class="kpi-details">
+                  <span class="kpi-label" data-wf-i18n="kpiPendingApprovals">Pending Approvals &amp; Docs</span>
+                  <h3 class="kpi-value" id="wfKpiPendingCount">0</h3>
+                  <span class="kpi-trend" id="wfKpiMissingDocs">Missing Docs: 0</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="wf-grid-2">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="fa-solid fa-calendar-check"></i> <span data-wf-i18n="deadlinesTitle">Upcoming Peru Payroll &amp; Statutory Deadlines</span></h3>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead><tr><th>Obligation</th><th>Due Date</th><th>Legal Reference</th></tr></thead>
+                    <tbody id="wfDeadlinesBody"><tr><td colspan="3" class="text-center text-muted">Loading...</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="fa-solid fa-building"></i> <span data-wf-i18n="branchCostsTitle">Labor Cost by Branch &amp; Staffing Alerts</span></h3>
+                </div>
+                <div id="wfBranchCostSummary" class="wf-card-pad"><span class="text-muted">No calculated payroll periods yet.</span></div>
+              </div>
+            </div>
+
+            <div class="card table-card">
+              <div class="card-header">
+                <h3><i class="fa-solid fa-clock"></i> <span data-wf-i18n="forecastTableTitle">Hourly Order Forecast &amp; Staffing Demand</span></h3>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Hour Window</th>
+                      <th>Predicted Order Volume</th>
+                      <th>Recommended Staff Total</th>
+                      <th>Baristas</th>
+                      <th>Kitchen Cooks</th>
+                      <th>Floor / Cashier</th>
+                    </tr>
+                  </thead>
+                  <tbody id="forecastTableBody">
+                    <tr><td colspan="6" class="text-center text-muted">Loading staffing forecast...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-pane 2: Employees, Branches & Contracts -->
+          <div class="wf-subpane" id="wf-pane-employees">
+            <div class="wf-grid-2">
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="fa-solid fa-store"></i> <span data-wf-i18n="branchesFormTitle">Branch &amp; REMYPE Verification</span></h3>
+                </div>
+                <form id="wfBranchForm" class="wf-card-pad">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Branch Name *</label><input type="text" id="wfBranchName" class="form-input" required placeholder="e.g. Sede Miraflores"></div>
+                    <div class="form-group"><label>RUC</label><input type="text" id="wfBranchRuc" class="form-input" maxlength="11" placeholder="20123456789"></div>
+                    <div class="form-group"><label>CIIU Code</label><input type="text" id="wfBranchCiiu" class="form-input" placeholder="e.g. 5610 (Rest.) / 5630 (Bar)"></div>
+                    <div class="form-group">
+                      <label>Default Labor Regime</label>
+                      <select id="wfBranchRegime" class="form-select">
+                        <option value="GENERAL">Régimen General (D.L. 728)</option>
+                        <option value="REMYPE_SMALL">REMYPE Pequeña Empresa</option>
+                        <option value="REMYPE_MICRO">REMYPE Microempresa</option>
+                      </select>
+                    </div>
+                    <div class="form-group"><label>REMYPE Reg. Number</label><input type="text" id="wfBranchRemypeNum" class="form-input" placeholder="Optional MTPE code"></div>
+                    <div class="form-group"><label>REMYPE Reg. Date</label><input type="date" id="wfBranchRemypeDate" class="form-input"></div>
+                  </div>
+                  <div style="display:flex; gap:14px; flex-wrap:wrap; margin:10px 0 14px;">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" id="wfBranchRemypeReg"> REMYPE Verified Registered</label>
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" id="wfBranchExcluded"> Activity Excluded (Bar/Nightclub)</label>
+                  </div>
+                  <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> Save Branch</button>
+                </form>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="fa-solid fa-user-plus"></i> <span data-wf-i18n="employeeFormTitle">Add / Update Employee &amp; Hashed PIN</span></h3>
+                </div>
+                <form id="wfEmployeeForm" class="wf-card-pad">
+                  <input type="hidden" id="wfEmpId">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Full Name *</label><input type="text" id="wfEmpName" class="form-input" required placeholder="Full legal name"></div>
+                    <div class="form-group"><label>Email (Self-Service)</label><input type="email" id="wfEmpEmail" class="form-input" placeholder="staff@company.pe"></div>
+                    <div class="form-group"><label>Doc Type &amp; Number</label><div style="display:flex;gap:6px;"><select id="wfEmpDocType" class="form-select" style="width:90px;"><option value="DNI">DNI</option><option value="CE">CE</option><option value="PASSPORT">PAS</option></select><input type="text" id="wfEmpDocNum" class="form-input" placeholder="8-12 digits"></div></div>
+                    <div class="form-group"><label>Branch</label><select id="wfEmpBranch" class="form-select"></select></div>
+                    <div class="form-group"><label>Position</label><input type="text" id="wfEmpPosition" class="form-input" placeholder="Barista, Cocinero, Cajero"></div>
+                    <div class="form-group"><label>Department</label><input type="text" id="wfEmpDepartment" class="form-input" placeholder="Kitchen, Bar, Floor"></div>
+                    <div class="form-group"><label>Role</label><select id="wfEmpRole" class="form-select"><option value="STAFF">Staff</option><option value="CASHIER">Cashier</option><option value="BARISTA">Barista</option><option value="COOK">Cook</option><option value="SUPERVISOR">Supervisor</option><option value="MANAGER">Manager</option></select></div>
+                    <div class="form-group"><label>Status</label><select id="wfEmpStatus" class="form-select"><option value="ACTIVE">Active</option><option value="ON_LEAVE">On Leave</option><option value="SUSPENDED">Suspended</option><option value="TERMINATED">Terminated</option></select></div>
+                    <div class="form-group"><label>Hire Date</label><input type="date" id="wfEmpHireDate" class="form-input"></div>
+                    <div class="form-group"><label>Pension System</label><select id="wfEmpPension" class="form-select"><option value="ONP">ONP (13%)</option><option value="AFP_INTEGRA">AFP Integra</option><option value="AFP_PRIMA">AFP Prima</option><option value="AFP_PROFUTURO">AFP Profuturo</option><option value="AFP_HABITAT">AFP Habitat</option><option value="NONE">None</option></select></div>
+                    <div class="form-group"><label>AFP CUSPP</label><input type="text" id="wfEmpCuspp" class="form-input" placeholder="Optional"></div>
+                    <div class="form-group"><label>Bank CCI</label><input type="text" id="wfEmpCci" class="form-input" placeholder="20-digit CCI"></div>
+                    <div class="form-group"><label>Clock-In PIN (4-8 digits, hashed)</label><input type="password" id="wfEmpPin" class="form-input" autocomplete="new-password" pattern="[0-9]{4,8}" placeholder="Leave blank to keep existing"></div>
+                  </div>
+                  <div style="display:flex; gap:14px; flex-wrap:wrap; margin:10px 0 14px;">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" id="wfEmpFamAllow"> Asignación Familiar (10% RMV)</label>
+                    <label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" id="wfEmpEps"> Enrolled in EPS (6.75% bonus)</label>
+                  </div>
+                  <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-floppy-disk"></i> Save Employee</button>
+                    <button type="button" class="btn btn-outline btn-sm" id="wfEmpResetBtn">Clear</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:16px;">
+              <div class="card-header"><h3><i class="fa-solid fa-file-signature"></i> Assign / Add Historical Contract</h3></div>
+              <form id="wfContractForm" class="wf-card-pad">
+                <div class="wf-form-grid">
+                  <div class="form-group"><label>Employee *</label><select id="wfCtrEmployee" class="form-select" required></select></div>
+                  <div class="form-group"><label>Branch</label><select id="wfCtrBranch" class="form-select"></select></div>
+                  <div class="form-group"><label>Requested Regime</label><select id="wfCtrRegime" class="form-select"><option value="GENERAL">General (D.L. 728)</option><option value="REMYPE_SMALL">REMYPE Small</option><option value="REMYPE_MICRO">REMYPE Micro</option></select></div>
+                  <div class="form-group"><label>Wage Type</label><select id="wfCtrWageType" class="form-select"><option value="MONTHLY">Monthly (PEN)</option><option value="HOURLY">Hourly (PEN)</option></select></div>
+                  <div class="form-group"><label>Base Monthly (S/)</label><input type="number" step="0.01" min="0" id="wfCtrSalary" class="form-input" value="1130"></div>
+                  <div class="form-group"><label>Hourly Rate (S/)</label><input type="number" step="0.01" min="0" id="wfCtrHourly" class="form-input" value="0"></div>
+                  <div class="form-group"><label>Effective From *</label><input type="date" id="wfCtrFrom" class="form-input" required></div>
+                  <div class="form-group" style="display:flex; align-items:flex-end;"><label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" id="wfCtrRemypeVerified"> REMYPE Verified for Contract</label></div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm" style="margin-top:10px;"><i class="fa-solid fa-plus"></i> Save Contract</button>
+              </form>
+            </div>
+
+            <div class="card table-card">
+              <div class="card-header"><h3><i class="fa-solid fa-users"></i> Employee Directory &amp; Active Contracts</h3></div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead><tr><th>Employee</th><th>Document</th><th>Branch &amp; Dept</th><th>Pension</th><th>Effective Regime</th><th>Missing Docs</th><th>Actions</th></tr></thead>
+                  <tbody id="wfEmployeesBody"><tr><td colspan="7" class="text-center text-muted">No employees recorded yet.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-pane 3: Shifts & Attendance -->
+          <div class="wf-subpane" id="wf-pane-schedules">
+            <div class="card" style="margin-bottom:16px;">
+              <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <h3><i class="fa-solid fa-calendar-plus"></i> Schedule Shift &amp; Publish</h3>
+                <button type="button" class="btn btn-outline btn-sm" id="wfPublishShiftsBtn"><i class="fa-solid fa-paper-plane"></i> Publish All Scheduled Shifts</button>
+              </div>
+              <form id="wfShiftForm" class="wf-card-pad">
+                <div class="wf-form-grid">
+                  <div class="form-group"><label>Employee *</label><select id="wfShiftEmp" class="form-select" required></select></div>
+                  <div class="form-group"><label>Branch</label><select id="wfShiftBranch" class="form-select"></select></div>
+                  <div class="form-group"><label>Position</label><input type="text" id="wfShiftPosition" class="form-input" value="Staff"></div>
+                  <div class="form-group"><label>Date *</label><input type="date" id="wfShiftDate" class="form-input" required></div>
+                  <div class="form-group"><label>Start (Lima)</label><input type="time" id="wfShiftStart" class="form-input" value="08:00" required></div>
+                  <div class="form-group"><label>End (Lima)</label><input type="time" id="wfShiftEnd" class="form-input" value="16:45" required></div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm" style="margin-top:10px;"><i class="fa-solid fa-plus"></i> Assign Shift</button>
+              </form>
+            </div>
+
+            <div id="wfOverlapBanner" class="wf-alert-banner" style="display:none;"></div>
+
+            <div class="wf-grid-2">
+              <div class="card table-card">
+                <div class="card-header"><h3><i class="fa-solid fa-calendar-days"></i> Shift Roster</h3></div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead><tr><th>Date</th><th>Employee</th><th>Time</th><th>Position</th><th>Status</th></tr></thead>
+                    <tbody id="wfShiftsBody"><tr><td colspan="5" class="text-center text-muted">No shifts scheduled yet.</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="card table-card">
+                <div class="card-header"><h3><i class="fa-solid fa-user-clock"></i> Time &amp; Attendance (Night 22:00-06:00 &amp; OT)</h3></div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead><tr><th>Date</th><th>Employee</th><th>Worked</th><th>Late / Night</th><th>Overtime</th><th>Action</th></tr></thead>
+                    <tbody id="wfAttendanceBody"><tr><td colspan="6" class="text-center text-muted">No attendance logs yet.</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-pane 4: Leave & Shift Swaps -->
+          <div class="wf-subpane" id="wf-pane-leaves">
+            <div class="wf-grid-2">
+              <div class="card">
+                <div class="card-header"><h3><i class="fa-solid fa-calendar-xmark"></i> Log Vacation / Sick / Absence Request</h3></div>
+                <form id="wfLeaveForm" class="wf-card-pad">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Employee *</label><select id="wfLeaveEmp" class="form-select" required></select></div>
+                    <div class="form-group"><label>Type</label><select id="wfLeaveType" class="form-select"><option value="VACATION">Vacaciones</option><option value="SICK">Descanso Médico</option><option value="JUSTIFIED">Permiso Justificado</option><option value="UNPAID">Licencia sin Goce</option></select></div>
+                    <div class="form-group"><label>Start Date *</label><input type="date" id="wfLeaveStart" class="form-input" required></div>
+                    <div class="form-group"><label>End Date *</label><input type="date" id="wfLeaveEnd" class="form-input" required></div>
+                  </div>
+                  <div class="form-group" style="margin-top:8px;"><label>Reason / Reference</label><input type="text" id="wfLeaveReason" class="form-input" placeholder="CITT / Medical note / Reason"></div>
+                  <button type="submit" class="btn btn-primary btn-sm" style="margin-top:10px;">Submit Leave Request</button>
+                </form>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3><i class="fa-solid fa-right-left"></i> Request Shift Swap</h3></div>
+                <form id="wfSwapForm" class="wf-card-pad">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Shift *</label><select id="wfSwapShift" class="form-select" required></select></div>
+                    <div class="form-group"><label>Target Employee *</label><select id="wfSwapTarget" class="form-select" required></select></div>
+                  </div>
+                  <div class="form-group" style="margin-top:8px;"><label>Reason</label><input type="text" id="wfSwapReason" class="form-input" placeholder="Optional reason"></div>
+                  <button type="submit" class="btn btn-primary btn-sm" style="margin-top:10px;">Submit Swap Request</button>
+                </form>
+              </div>
+            </div>
+
+            <div class="wf-grid-2">
+              <div class="card table-card">
+                <div class="card-header"><h3>Leave Requests &amp; Approvals</h3></div>
+                <div class="table-responsive"><table class="data-table"><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th>Action</th></tr></thead><tbody id="wfLeavesBody"><tr><td colspan="5" class="text-center text-muted">No leave requests.</td></tr></tbody></table></div>
+              </div>
+              <div class="card table-card">
+                <div class="card-header"><h3>Shift Swap Requests</h3></div>
+                <div class="table-responsive"><table class="data-table"><thead><tr><th>Shift</th><th>Requester → Target</th><th>Status</th><th>Action</th></tr></thead><tbody id="wfSwapsBody"><tr><td colspan="4" class="text-center text-muted">No shift swap requests.</td></tr></tbody></table></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-pane 5: Peru Payroll, Rules & Boletas -->
+          <div class="wf-subpane" id="wf-pane-payroll">
+            <div class="wf-grid-2">
+              <div class="card">
+                <div class="card-header"><h3><i class="fa-solid fa-scale-balanced"></i> Effective-Dated Peru Labor Law Rules</h3></div>
+                <form id="wfRuleForm" class="wf-card-pad">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Effective From</label><input type="date" id="wfRuleFrom" class="form-input" required></div>
+                    <div class="form-group"><label>RMV (PEN S/)</label><input type="number" step="0.01" id="wfRuleRmv" class="form-input" value="1130"></div>
+                    <div class="form-group"><label>UIT (PEN S/)</label><input type="number" step="0.01" id="wfRuleUit" class="form-input" value="5350"></div>
+                    <div class="form-group"><label>PLAME Version</label><input type="text" id="wfRulePlame" class="form-input" value="4.3"></div>
+                    <div class="form-group"><label>Tips Treatment</label><select id="wfRuleTips" class="form-select"><option value="NON_COMPUTABLE_GRATUITY">Non-Computable Gratuity (Default)</option><option value="COMPUTABLE_SURCHARGE">Computable Service Surcharge</option></select></div>
+                  </div>
+                  <div class="form-group" style="margin-top:8px;"><label>Legal Source Citation *</label><input type="text" id="wfRuleSource" class="form-input" required placeholder="D.S. 006-2024-TR..."></div>
+                  <button type="submit" class="btn btn-outline btn-sm" style="margin-top:10px;"><i class="fa-solid fa-floppy-disk"></i> Save Effective Rule</button>
+                </form>
+              </div>
+
+              <div class="card">
+                <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                  <h3><i class="fa-solid fa-calculator"></i> Calculate Peru Payroll Run</h3>
+                  <div style="display:flex; gap:6px;">
+                    <a href="/api/workforce/exports/plame" class="btn btn-outline btn-sm"><i class="fa-solid fa-file-export"></i> PLAME (.txt)</a>
+                    <a href="/api/workforce/exports/t-registro" class="btn btn-outline btn-sm"><i class="fa-solid fa-file-lines"></i> T-REGISTRO (.txt)</a>
+                  </div>
+                </div>
+                <form id="wfPayrollRunForm" class="wf-card-pad">
+                  <div class="wf-form-grid">
+                    <div class="form-group"><label>Period Code *</label><input type="text" id="wfPayCode" class="form-input" required placeholder="2026-11"></div>
+                    <div class="form-group"><label>Run Type</label><select id="wfPayType" class="form-select"><option value="MONTHLY">Planilla Mensual</option><option value="GRATIFICACION_JUL">Gratificación Julio</option><option value="GRATIFICACION_DIC">Gratificación Diciembre</option><option value="CTS_MAY">CTS Mayo</option><option value="CTS_NOV">CTS Noviembre</option></select></div>
+                    <div class="form-group"><label>Branch (Optional)</label><select id="wfPayBranch" class="form-select"></select></div>
+                    <div class="form-group"><label>Start Date</label><input type="date" id="wfPayStart" class="form-input" required></div>
+                    <div class="form-group"><label>End Date</label><input type="date" id="wfPayEnd" class="form-input" required></div>
+                    <div class="form-group"><label>Payment Date</label><input type="date" id="wfPayDate" class="form-input" required></div>
+                  </div>
+                  <button type="submit" class="btn btn-primary btn-sm" style="margin-top:12px;"><i class="fa-solid fa-play"></i> Calculate &amp; Generate Boletas</button>
+                </form>
+              </div>
+            </div>
+
+            <div class="card table-card">
+              <div class="card-header"><h3><i class="fa-solid fa-receipt"></i> Calculated Boletas de Pago &amp; Audit History</h3></div>
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead><tr><th>Period</th><th>Employee</th><th>Regime</th><th>Gross (S/)</th><th>Deductions (S/)</th><th>Net Pay (S/)</th><th>Employer (S/)</th><th>Flags</th><th>Boleta</th></tr></thead>
+                  <tbody id="wfPayrollEntriesBody"><tr><td colspan="9" class="text-center text-muted">Run a payroll calculation to generate Boletas de Pago.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-pane 6: Employee Self-Service Portal -->
+          <div class="wf-subpane" id="wf-pane-selfservice">
+            <div class="card table-card" style="margin-bottom:16px;">
+              <div class="card-header"><h3><i class="fa-solid fa-calendar-check"></i> My Published Shifts</h3></div>
+              <div class="table-responsive"><table class="data-table"><thead><tr><th>Date</th><th>Time</th><th>Position</th><th>Status</th></tr></thead><tbody id="wfMyShiftsBody"><tr><td colspan="4" class="text-center text-muted">No shifts available.</td></tr></tbody></table></div>
+            </div>
+            <div class="card table-card">
+              <div class="card-header"><h3><i class="fa-solid fa-file-invoice"></i> Mis Boletas de Pago</h3></div>
+              <div class="table-responsive"><table class="data-table"><thead><tr><th>Period</th><th>Regime</th><th>Gross (S/)</th><th>Net Pay (S/)</th><th>Payment Date</th><th>Boleta</th></tr></thead><tbody id="wfMyBoletasBody"><tr><td colspan="6" class="text-center text-muted">No payslips yet.</td></tr></tbody></table></div>
             </div>
           </div>
         </section>
@@ -578,7 +932,7 @@
             <div>
               <span class="settings-eyebrow">STORE CONTROL CENTER</span>
               <h2>Back Office Settings</h2>
-              <p>Manage your restaurant identity, local pricing rules and connected POS environment.</p>
+              <p>Manage your restaurant identity, inventory alerts, storefront channels and connected POS environment.</p>
             </div>
             <span class="settings-save-state" id="settingsSaveState" role="status" aria-live="polite">Changes are saved to the cloud</span>
           </div>
@@ -598,8 +952,22 @@
                   <label for="settingAddress">Business address</label>
                   <input type="text" id="settingAddress" class="form-input" maxlength="240" autocomplete="street-address" placeholder="Street, city, country">
                 </div>
+                <div class="form-row settings-form-row">
+                  <div class="form-group flex-1">
+                    <label for="settingPhone">Contact phone</label>
+                    <input type="tel" id="settingPhone" class="form-input" maxlength="40" autocomplete="tel" placeholder="+1 (555) 010-2030">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="settingSupportEmail">Support email</label>
+                    <input type="email" id="settingSupportEmail" class="form-input" maxlength="120" autocomplete="email" placeholder="orders@yourbistro.com">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="settingBusinessHours">Business hours</label>
+                  <input type="text" id="settingBusinessHours" class="form-input" maxlength="120" placeholder="Daily 07:00 – 22:00">
+                </div>
                 <div class="settings-form-foot">
-                  <span class="settings-help">Shown across your Back Office and customer storefront.</span>
+                  <span class="settings-help">Shown across your Back Office, receipts and customer storefront.</span>
                 </div>
                 <button type="submit" class="btn btn-primary" id="saveStoreSettingsBtn">
                   <i class="fa-solid fa-floppy-disk"></i> Save store profile
@@ -632,6 +1000,81 @@
                 </div>
                 <button type="submit" class="btn btn-primary" id="saveTaxSettingsBtn">
                   <i class="fa-solid fa-calculator"></i> Save currency & tax
+                </button>
+              </form>
+            </div>
+
+            <div class="card settings-card">
+              <div class="card-header">
+                <h3><i class="fa-solid fa-boxes-stacked"></i> Inventory &amp; Low-Stock Alerts</h3>
+                <span class="settings-card-caption">Catalog thresholds</span>
+              </div>
+              <form id="storeSettingsFormInventory" class="settings-form">
+                <div class="form-group">
+                  <label for="settingLowStockThreshold">Default low-stock threshold (units)</label>
+                  <input type="number" id="settingLowStockThreshold" class="form-input" min="0" max="100000" step="1" required style="max-width: 180px;">
+                  <span class="settings-help">Catalog items strictly below this stock level display a Low Stock badge and match the Low Stock filter.</span>
+                </div>
+                <label class="settings-toggle-row" for="settingLowStockAlerts">
+                  <input type="checkbox" id="settingLowStockAlerts">
+                  <div>
+                    <strong>Highlight low-stock items in catalog</strong>
+                    <span>Show warning badges and low-stock counter in Products &amp; Catalog.</span>
+                  </div>
+                </label>
+                <label class="settings-toggle-row" for="settingAutoDeplete">
+                  <input type="checkbox" id="settingAutoDeplete">
+                  <div>
+                    <strong>Auto-deplete recipe ingredients on POS sync</strong>
+                    <span>Automatically deduct BOM raw ingredient stock when terminals sync sales.</span>
+                  </div>
+                </label>
+                <button type="submit" class="btn btn-primary" id="saveInventorySettingsBtn">
+                  <i class="fa-solid fa-sliders"></i> Save inventory rules
+                </button>
+              </form>
+            </div>
+
+            <div class="card settings-card">
+              <div class="card-header">
+                <h3><i class="fa-solid fa-utensils"></i> Storefront &amp; Kitchen Operations</h3>
+                <span class="settings-card-caption">Ordering channels</span>
+              </div>
+              <form id="storeSettingsFormOperations" class="settings-form">
+                <label class="settings-toggle-row" for="settingAcceptOnlineOrders">
+                  <input type="checkbox" id="settingAcceptOnlineOrders">
+                  <div>
+                    <strong>Accept online orders (/order)</strong>
+                    <span>Pause customer storefront submissions during peak rush without taking menus offline.</span>
+                  </div>
+                </label>
+                <div class="form-group">
+                  <label for="settingDefaultPrepTime">Default online order prep time (minutes)</label>
+                  <input type="number" id="settingDefaultPrepTime" class="form-input" min="1" max="180" step="1" required style="max-width: 180px;">
+                </div>
+                <div class="form-group">
+                  <label>Enabled fulfillment modes</label>
+                  <div class="settings-channel-grid">
+                    <label class="settings-channel-chip" for="settingAllowDineIn">
+                      <input type="checkbox" id="settingAllowDineIn">
+                      <span>Dine-In</span>
+                    </label>
+                    <label class="settings-channel-chip" for="settingAllowTakeaway">
+                      <input type="checkbox" id="settingAllowTakeaway">
+                      <span>Takeaway</span>
+                    </label>
+                    <label class="settings-channel-chip" for="settingAllowDelivery">
+                      <input type="checkbox" id="settingAllowDelivery">
+                      <span>Delivery</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="settingReceiptFooter">Receipt footer message</label>
+                  <input type="text" id="settingReceiptFooter" class="form-input" maxlength="240" placeholder="Thank you for dining with us!">
+                </div>
+                <button type="submit" class="btn btn-primary" id="saveOperationsSettingsBtn">
+                  <i class="fa-solid fa-check"></i> Save storefront &amp; kitchen rules
                 </button>
               </form>
             </div>
@@ -926,15 +1369,194 @@
         <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px;" id="recipeInstructionsBox"></div>
       </div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-outline" id="recipeModalPrintBtn">
+          <i class="fa-solid fa-print"></i> Print Recipe Card
+        </button>
         <button type="button" class="btn btn-primary" data-close="recipeModal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Ingredient 30-Day Stock History -->
+  <div class="modal" id="ingredientHistoryModal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-dialog-wide">
+      <div class="modal-header">
+        <div>
+          <h3 id="ingredientHistoryModalTitle"><i class="fa-solid fa-chart-line"></i> 30-Day Stock Level History</h3>
+          <span class="history-subtitle" id="ingredientHistorySubtitle">Daily closing stock levels and minimum threshold</span>
+        </div>
+        <button class="modal-close" data-close="ingredientHistoryModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="history-toolbar">
+          <label for="historyIngredientSelect">Ingredient</label>
+          <select id="historyIngredientSelect" class="form-select" style="max-width: 300px;"></select>
+        </div>
+
+        <div class="history-summary-grid" id="ingredientHistorySummary">
+          <div class="history-stat-box"><span>Current Stock</span><strong id="histCurrentStock">—</strong></div>
+          <div class="history-stat-box"><span>Min Threshold</span><strong id="histMinThreshold">—</strong></div>
+          <div class="history-stat-box"><span>30-Day Range</span><strong id="histRange">—</strong></div>
+          <div class="history-stat-box"><span>Recorded Movements</span><strong id="histMovementsCount">—</strong></div>
+        </div>
+
+        <div class="history-notice" id="ingredientHistoryNotice" style="display:none;"></div>
+
+        <div class="history-chart-wrap">
+          <canvas id="ingredientHistoryChart"></canvas>
+        </div>
+
+        <div class="history-events-section">
+          <h4>Recent Stock Movements (Past 30 Days)</h4>
+          <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Date &amp; Time</th>
+                  <th>Event</th>
+                  <th>Reason</th>
+                  <th>Change</th>
+                  <th>Balance After</th>
+                </tr>
+              </thead>
+              <tbody id="ingredientHistoryEventsBody">
+                <tr><td colspan="5" class="text-center text-muted">Loading history...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" data-close="ingredientHistoryModal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Printable Recipe Card -->
+  <div class="modal" id="recipePrintModal">
+    <div class="modal-backdrop no-print"></div>
+    <div class="modal-dialog modal-dialog-wide recipe-print-dialog">
+      <div class="modal-header no-print">
+        <h3><i class="fa-solid fa-print"></i> Printable Recipe Card</h3>
+        <button class="modal-close" data-close="recipePrintModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <article class="recipe-card-sheet" id="printableRecipeCard" aria-label="Printable recipe card"></article>
+      </div>
+      <div class="modal-footer no-print">
+        <button type="button" class="btn btn-outline" data-close="recipePrintModal">Close</button>
+        <button type="button" class="btn btn-primary" id="confirmPrintRecipeBtn">
+          <i class="fa-solid fa-print"></i> Print Recipe Card
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PIN Attendance Kiosk -->
+  <div class="modal" id="pinKioskModal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog" style="max-width:440px;">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-key"></i> Employee PIN Attendance Kiosk</h3>
+        <button class="modal-close" data-close="pinKioskModal">&times;</button>
+      </div>
+      <form id="pinKioskForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="kioskEmployeeSelect">Employee (optional if PIN unique)</label>
+            <select id="kioskEmployeeSelect" class="form-select"></select>
+          </div>
+          <div class="form-group">
+            <label for="kioskPinInput">Personal PIN (4–8 digits) *</label>
+            <input type="password" id="kioskPinInput" class="form-input" inputmode="numeric" pattern="[0-9]{4,8}" autocomplete="off" required placeholder="••••">
+          </div>
+          <div class="form-group">
+            <label for="kioskActionSelect">Attendance Action</label>
+            <select id="kioskActionSelect" class="form-select">
+              <option value="CLOCK_IN">Clock In (Entrada)</option>
+              <option value="BREAK_START">Start Break (Inicio Refrigerio)</option>
+              <option value="BREAK_END">End Break (Fin Refrigerio)</option>
+              <option value="CLOCK_OUT">Clock Out (Salida)</option>
+            </select>
+          </div>
+          <div id="pinKioskResult" style="font-size:13px; margin-top:8px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" data-close="pinKioskModal">Close</button>
+          <button type="submit" class="btn btn-primary">Record Timestamp</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: Printable Spanish Boleta de Pago -->
+  <div class="modal" id="boletaPrintModal">
+    <div class="modal-backdrop no-print"></div>
+    <div class="modal-dialog modal-dialog-wide">
+      <div class="modal-header no-print">
+        <h3><i class="fa-solid fa-file-invoice-dollar"></i> Boleta de Pago (Perú)</h3>
+        <button class="modal-close" data-close="boletaPrintModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <article class="boleta-sheet" id="printableBoletaSheet" aria-label="Boleta de Pago de Remuneraciones"></article>
+      </div>
+      <div class="modal-footer no-print">
+        <button type="button" class="btn btn-outline" data-close="boletaPrintModal">Cerrar</button>
+        <button type="button" class="btn btn-primary" id="confirmPrintBoletaBtn">
+          <i class="fa-solid fa-print"></i> Imprimir / Guardar PDF
+        </button>
       </div>
     </div>
   </div>
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <!-- Chart.js -->
+  <!-- Supabase Authentication -->
+  <section id="openposLogin" style="min-height:100vh;display:none;align-items:center;justify-content:center;padding:24px;background:#0b1220;color:#e5e7eb;font-family:'Plus Jakarta Sans',sans-serif;">
+    <form id="openposLoginForm" style="width:min(100%,420px);padding:36px;border:1px solid #273449;border-radius:20px;background:#111b2d;text-align:center;box-shadow:0 24px 70px rgba(0,0,0,0.45);">
+      <div style="font-size:32px;color:#60a5fa;margin-bottom:12px;"><i class="fa-solid fa-cash-register"></i></div>
+      <h1 style="margin:0 0 8px;font-size:28px;">OpenPOS</h1>
+      <p style="color:#9ca3af;margin:0 0 24px;">Sign in to your restaurant back office</p>
+      <input id="openposEmail" type="email" autocomplete="username" required placeholder="Email" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:12px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <input id="openposPassword" type="password" autocomplete="current-password" required placeholder="Password" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:14px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <button id="emailSignInBtn" type="submit" style="width:100%;padding:13px 18px;border:0;border-radius:10px;background:#2563eb;color:white;font-size:15px;font-weight:700;cursor:pointer;">Sign in with Supabase</button>
+      <button id="googleSignInBtn" type="button" style="width:100%;margin-top:10px;padding:13px 18px;border:1px solid #3b4960;border-radius:10px;background:#f9fafb;color:#111827;font-size:15px;font-weight:700;cursor:pointer;">
+        <i class="fa-brands fa-google"></i> Continue with Google
+      </button>
+      <div style="margin-top:14px;font-size:13px;">
+        <a href="/reset-password" style="color:#93c5fd;text-decoration:none;">Forgot password?</a>
+      </div>
+      <p id="loginError" role="alert" style="color:#fca5a5;font-size:13px;margin:16px 0 0;"></p>
+    </form>
+  </section>
+
+  <!-- Chart.js & Shared Auth Client -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth-client.js"></script>
+  <script>
+    window.OpenPosAuth.init({
+      loginSectionId: 'openposLogin',
+      appContainerSelector: '.app-container',
+      formId: 'openposLoginForm',
+      emailInputId: 'openposEmail',
+      passwordInputId: 'openposPassword',
+      submitBtnId: 'emailSignInBtn',
+      googleBtnId: 'googleSignInBtn',
+      errorElId: 'loginError',
+      logoutBtnId: 'logoutBtn',
+      userEmailLabelId: 'authUserEmail',
+      scriptSrc: ['/workforce-peru.js', '/app.js'],
+      onAuthenticated: function () {
+        if (typeof window.__openposRefreshAll === 'function') {
+          window.__openposRefreshAll();
+        }
+        if (typeof window.initWorkforcePeruModule === 'function') {
+          window.initWorkforcePeruModule();
+        }
+      }
+    });
+  </script>
 </body>
 </html>

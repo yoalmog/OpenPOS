@@ -1,5 +1,7 @@
 // Standalone Kitchen Display System (KDS) Controller
-document.addEventListener('DOMContentLoaded', () => {
+function bootOpenPosKds() {
+  if (window.__openposKdsBooted) return;
+  window.__openposKdsBooted = true;
   let state = {
     selectedStation: 'ALL',
     tickets: [],
@@ -40,9 +42,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Fetch Tickets
   async function fetchTickets() {
+    if (window.openposAuthRequired && !window.__openposSignedIn) return;
     try {
       const res = await fetch('/api/kitchen/tickets');
+      if (!res.ok) return;
       const tickets = await res.json();
+      if (!Array.isArray(tickets)) return;
 
       // Check if new ticket arrived
       let hasNew = false;
@@ -178,12 +183,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial load
   fetchTickets();
+  window.__openposKdsRefresh = fetchTickets;
 
-  // Poll for live tickets every 3 seconds
+  // Poll for live tickets every 3 seconds while signed in
   setInterval(fetchTickets, 3000);
 
   function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootOpenPosKds);
+} else {
+  bootOpenPosKds();
+}

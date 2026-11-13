@@ -1,8 +1,27 @@
 // OpenPOS Back Office Restaurant & Cafe Suite Controller
-document.addEventListener('DOMContentLoaded', () => {
+function bootOpenPosApp() {
+  if (window.__openposAppBooted) return;
+  window.__openposAppBooted = true;
   // Global State
   let state = {
-    storeInfo: { name: 'Artisan Cafe & Bistro', currency: '$', taxRate: 17.0 },
+    storeInfo: {
+      name: 'Artisan Cafe & Bistro',
+      address: '',
+      phone: '',
+      supportEmail: '',
+      businessHours: '',
+      currency: '$',
+      taxRate: 17.0,
+      receiptFooter: '',
+      lowStockThreshold: 10,
+      autoDepleteOnSync: true,
+      enableLowStockAlerts: true,
+      acceptOnlineOrders: true,
+      defaultPrepTimeMinutes: 15,
+      allowDineIn: true,
+      allowTakeaway: true,
+      allowDelivery: true
+    },
     stats: {},
     items: [],
     categories: [],
@@ -19,7 +38,13 @@ document.addEventListener('DOMContentLoaded', () => {
     activeTab: 'dashboard',
     selectedProductColor: '#2E7D32',
     chartInstance: null,
-    kdsFilterStation: 'ALL'
+    ingredientHistoryChartInstance: null,
+    activeRecipeIndex: null,
+    kdsFilterStation: 'ALL',
+    lowStockOnly: false,
+    productSearch: '',
+    productCategoryFilter: '',
+    selectedProductIds: new Set()
   };
 
   // DOM Elements
@@ -38,9 +63,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const productModal = document.getElementById('productModal');
   const categoryModal = document.getElementById('categoryModal');
   const ingredientModal = document.getElementById('ingredientModal');
+  const ingredientHistoryModal = document.getElementById('ingredientHistoryModal');
   const wasteModal = document.getElementById('wasteModal');
   const tempModal = document.getElementById('tempModal');
   const recipeModal = document.getElementById('recipeModal');
+  const recipePrintModal = document.getElementById('recipePrintModal');
 
   // Initialize
   initClock();
@@ -49,9 +76,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSyncUrl();
   setupModals();
   fetchInitialData();
+  window.__openposRefreshAll = fetchInitialData;
+  window.showToast = showToast;
 
-  // Polling for live updates
+  // Polling for live updates (paused whenever session is signed out)
   setInterval(() => {
+    if (window.openposAuthRequired && !window.__openposSignedIn) return;
     if (state.activeTab === 'dashboard') fetchStats();
     if (state.activeTab === 'kitchen') fetchKdsTickets();
     if (state.activeTab === 'online-orders') fetchOnlineOrders();
@@ -110,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ingredients: 'Raw Ingredients & Bulk Stock',
         categories: 'Catalog Categories',
         waste: 'Food Waste & Spoilage Log',
-        forecast: 'Predictive Staffing & Demand Forecast',
+        forecast: 'Workforce Management & Peru Payroll',
         safety: 'Food Safety & Daily Checklists',
         receipts: 'Sales & Receipts Log',
         settings: 'Back Office Settings'
@@ -124,7 +154,12 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (tabId === 'recipes') fetchRecipeProfitability();
       else if (tabId === 'ingredients') fetchIngredients();
       else if (tabId === 'waste') fetchWaste();
-      else if (tabId === 'forecast') fetchForecast();
+      else if (tabId === 'forecast') {
+        fetchForecast();
+        if (typeof window.refreshWorkforcePeruData === 'function') {
+          window.refreshWorkforcePeruData();
+        }
+      }
       else if (tabId === 'safety') fetchSafety();
       else if (tabId === 'settings') fetchStatus();
     }
@@ -196,11 +231,27 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
+      const s = data.storeSettings || {};
       state.storeInfo = {
-        name: data.storeName || 'OpenPOS Store',
-        currency: data.currency || 'S/',
-        taxRate: data.taxRate !== null && data.taxRate !== undefined && Number.isFinite(Number(data.taxRate)) ? Number(data.taxRate) : null,
-        address: data.storeAddress || ''
+        ...state.storeInfo,
+        name: s.name || data.storeName || 'OpenPOS Store',
+        currency: s.currency || data.currency || 'S/',
+        taxRate: s.taxRate !== null && s.taxRate !== undefined && Number.isFinite(Number(s.taxRate))
+          ? Number(s.taxRate)
+          : (data.taxRate !== null && data.taxRate !== undefined && Number.isFinite(Number(data.taxRate)) ? Number(data.taxRate) : null),
+        address: s.address ?? data.storeAddress ?? '',
+        phone: s.phone ?? '',
+        supportEmail: s.supportEmail ?? '',
+        businessHours: s.businessHours ?? '',
+        receiptFooter: s.receiptFooter ?? '',
+        lowStockThreshold: Number.isFinite(Number(s.lowStockThreshold)) ? Number(s.lowStockThreshold) : 10,
+        autoDepleteOnSync: s.autoDepleteOnSync !== false,
+        enableLowStockAlerts: s.enableLowStockAlerts !== false,
+        acceptOnlineOrders: s.acceptOnlineOrders !== false,
+        defaultPrepTimeMinutes: Number.isFinite(Number(s.defaultPrepTimeMinutes)) ? Number(s.defaultPrepTimeMinutes) : 15,
+        allowDineIn: s.allowDineIn !== false,
+        allowTakeaway: s.allowTakeaway !== false,
+        allowDelivery: s.allowDelivery !== false
       };
       if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
       const dbStatus = document.getElementById('settingsDbStatus');
@@ -217,6 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (databaseState) databaseState.textContent = connected ? 'Connected' : 'Not connected';
       if (catalogCount) catalogCount.textContent = String(data.counts?.items ?? '—');
       populateSettingsForm();
+      renderProductsTable();
     } catch (err) {
       console.error('Error fetching status:', err);
     }
@@ -432,9 +484,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // 3. Recipes & Food Cost Profitability
   async function fetchRecipeProfitability() {
     try {
-      const res = await fetch('/api/recipes/profitability');
-      const data = await res.json();
+      const [profitRes, recipesRes] = await Promise.all([
+        fetch('/api/recipes/profitability'),
+        fetch('/api/recipes')
+      ]);
+      const data = await profitRes.json();
       state.recipeProfitability = data.items || [];
+      if (recipesRes.ok) {
+        const recipesData = await recipesRes.json();
+        if (Array.isArray(recipesData)) state.recipes = recipesData;
+      }
       renderRecipeProfitability();
     } catch (err) {
       console.error('Error fetching recipe profitability:', err);
@@ -449,6 +508,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    const curr = state.storeInfo.currency || '$';
     tbody.innerHTML = state.recipeProfitability.map((m, idx) => {
       let statusBadge = '<span class="badge badge-success">Healthy (&lt;30%)</span>';
       if (m.foodCostPct > 35) statusBadge = '<span class="badge badge-danger">High Cost (&gt;35%)</span>';
@@ -458,9 +518,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <tr>
           <td><strong>${escapeHtml(m.itemName)}</strong></td>
           <td><span class="badge badge-info">${escapeHtml(m.station?.replace('_', ' ') || 'KITCHEN')}</span></td>
-          <td><strong>$${Number(m.price).toFixed(2)}</strong></td>
-          <td style="color:#f59e0b;">$${Number(m.foodCost).toFixed(2)}</td>
-          <td style="color:#10b981;"><strong>$${Number(m.grossMargin).toFixed(2)}</strong></td>
+          <td><strong>${escapeHtml(curr)}${Number(m.price).toFixed(2)}</strong></td>
+          <td style="color:#f59e0b;">${escapeHtml(curr)}${Number(m.foodCost).toFixed(2)}</td>
+          <td style="color:#10b981;"><strong>${escapeHtml(curr)}${Number(m.grossMargin).toFixed(2)}</strong></td>
           <td>
             <div style="font-weight:700;">${m.foodCostPct}%</div>
             <div class="profit-meter">
@@ -469,21 +529,36 @@ document.addEventListener('DOMContentLoaded', () => {
           </td>
           <td>${statusBadge}</td>
           <td class="text-right">
-            <button class="btn btn-outline btn-sm" onclick="window.openRecipeModal(${idx})">
-              <i class="fa-solid fa-list"></i> View BOM
-            </button>
+            <div class="action-btn-group">
+              <button type="button" class="btn btn-outline btn-sm" onclick="window.openRecipeModal(${idx})">
+                <i class="fa-solid fa-list"></i> View BOM
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="window.printRecipeCard(${idx})" title="Generate printable recipe card">
+                <i class="fa-solid fa-print"></i> Print Card
+              </button>
+            </div>
           </td>
         </tr>
       `;
     }).join('');
   }
 
+  function resolveRecipeMeta(m) {
+    const recipe = state.recipes.find(r => r.itemId === m.itemId);
+    return {
+      instructions: m.instructions || recipe?.instructions || 'Standard barista & kitchen preparation procedure.',
+      allergens: m.allergens || recipe?.allergens || ''
+    };
+  }
+
   window.openRecipeModal = function(index) {
     const m = state.recipeProfitability[index];
     if (!m) return;
+    state.activeRecipeIndex = index;
+    const curr = state.storeInfo.currency || '$';
     document.getElementById('recipeModalTitle').textContent = `Recipe BOM: ${m.itemName}`;
-    document.getElementById('recipeModalMeta').textContent = 
-      `Selling Price: $${m.price.toFixed(2)} | Raw Food Cost: $${m.foodCost.toFixed(2)} | Gross Margin: $${m.grossMargin.toFixed(2)} (${m.profitMarginPct}%)`;
+    document.getElementById('recipeModalMeta').textContent =
+      `Selling Price: ${curr}${m.price.toFixed(2)} | Raw Food Cost: ${curr}${m.foodCost.toFixed(2)} | Gross Margin: ${curr}${m.grossMargin.toFixed(2)} (${m.profitMarginPct}%)`;
 
     const tbody = document.getElementById('recipeIngredientsList');
     if (m.ingredients && m.ingredients.length > 0) {
@@ -491,23 +566,108 @@ document.addEventListener('DOMContentLoaded', () => {
         <tr>
           <td><strong>${escapeHtml(ing.name)}</strong></td>
           <td>${ing.quantity} ${escapeHtml(ing.unit)}</td>
-          <td>$${Number(ing.unitCost).toFixed(4)}</td>
-          <td><strong>$${Number(ing.lineCost).toFixed(2)}</strong></td>
+          <td>${escapeHtml(curr)}${Number(ing.unitCost).toFixed(4)}</td>
+          <td><strong>${escapeHtml(curr)}${Number(ing.lineCost).toFixed(2)}</strong></td>
         </tr>
       `).join('');
     } else {
       tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No specific raw ingredients assigned yet.</td></tr>';
     }
 
-    const recipe = state.recipes.find(r => r.itemId === m.itemId);
+    const { instructions, allergens } = resolveRecipeMeta(m);
     document.getElementById('recipeInstructionsBox').innerHTML = `
       <div style="font-weight:600; margin-bottom:4px; font-size:0.8rem; color:var(--text-muted);">Preparation Instructions:</div>
-      <div style="font-size:0.875rem;">${escapeHtml(recipe?.instructions || 'Standard barista & kitchen preparation procedure.')}</div>
-      ${recipe?.allergens ? `<div style="font-size:0.75rem; color:#f59e0b; margin-top:6px;"><strong>Allergens:</strong> ${escapeHtml(recipe.allergens)}</div>` : ''}
+      <div style="font-size:0.875rem; white-space:pre-line;">${escapeHtml(instructions)}</div>
+      ${allergens ? `<div style="font-size:0.75rem; color:#f59e0b; margin-top:6px;"><strong>Allergens:</strong> ${escapeHtml(allergens)}</div>` : ''}
     `;
 
     openModal(recipeModal);
   };
+
+  window.printRecipeCard = function(index) {
+    const m = state.recipeProfitability[index];
+    if (!m) return;
+    const sheet = document.getElementById('printableRecipeCard');
+    if (!sheet) return;
+
+    const curr = state.storeInfo.currency || '$';
+    const { instructions, allergens } = resolveRecipeMeta(m);
+    const stationLabel = (m.station || 'HOT_KITCHEN').replace(/_/g, ' ');
+    const ingredientsRows = (m.ingredients && m.ingredients.length > 0)
+      ? m.ingredients.map(ing => `
+          <tr>
+            <td><strong>${escapeHtml(ing.name)}</strong></td>
+            <td>${escapeHtml(String(ing.quantity))} ${escapeHtml(ing.unit || '')}</td>
+            <td>${escapeHtml(curr)}${Number(ing.unitCost || 0).toFixed(4)}</td>
+            <td><strong>${escapeHtml(curr)}${Number(ing.lineCost || 0).toFixed(2)}</strong></td>
+          </tr>
+        `).join('')
+      : '<tr><td colspan="4" style="color:#64748b;">No raw ingredients assigned to this recipe yet.</td></tr>';
+
+    sheet.innerHTML = `
+      <div class="recipe-card-top">
+        <div>
+          <div class="recipe-card-brand">${escapeHtml(state.storeInfo.name || 'OpenPOS')} — Kitchen Recipe Card</div>
+          <h2 class="recipe-card-title">${escapeHtml(m.itemName)}</h2>
+          <div class="recipe-card-badges">
+            <span class="recipe-card-pill"><i class="fa-solid fa-fire-burner"></i> ${escapeHtml(stationLabel)}</span>
+            <span class="recipe-card-pill"><i class="fa-regular fa-clock"></i> ${Number(m.prepTimeMinutes || 5)} min prep</span>
+            <span class="recipe-card-pill"><i class="fa-solid fa-tag"></i> ${escapeHtml(m.category || 'Menu Item')}</span>
+          </div>
+        </div>
+        <div class="recipe-card-meta-right">
+          <div>Generated ${escapeHtml(new Date().toLocaleDateString())}</div>
+          <div>ID: ${escapeHtml(m.itemId)}</div>
+        </div>
+      </div>
+
+      <div class="recipe-card-kpis">
+        <div class="recipe-card-kpi"><span>Menu Price</span><strong>${escapeHtml(curr)}${Number(m.price || 0).toFixed(2)}</strong></div>
+        <div class="recipe-card-kpi"><span>Raw Food Cost</span><strong>${escapeHtml(curr)}${Number(m.foodCost || 0).toFixed(2)}</strong></div>
+        <div class="recipe-card-kpi"><span>Food Cost %</span><strong>${Number(m.foodCostPct || 0)}%</strong></div>
+        <div class="recipe-card-kpi"><span>Gross Margin</span><strong>${escapeHtml(curr)}${Number(m.grossMargin || 0).toFixed(2)}</strong></div>
+      </div>
+
+      <div class="recipe-card-section">
+        <h4>Ingredients &amp; Standard Portions</h4>
+        <table class="recipe-card-table">
+          <thead>
+            <tr>
+              <th>Ingredient</th>
+              <th>Portion Needed</th>
+              <th>Unit Cost</th>
+              <th>Line Cost</th>
+            </tr>
+          </thead>
+          <tbody>${ingredientsRows}</tbody>
+        </table>
+      </div>
+
+      <div class="recipe-card-section" style="margin-bottom:0;">
+        <h4>Preparation Instructions</h4>
+        <div class="recipe-card-instructions">${escapeHtml(instructions)}</div>
+        ${allergens ? `<div class="recipe-card-allergens"><i class="fa-solid fa-triangle-exclamation"></i> Allergens: ${escapeHtml(allergens)}</div>` : ''}
+      </div>
+    `;
+
+    closeModal(recipeModal);
+    openModal(recipePrintModal);
+    if (typeof window.print === 'function') {
+      setTimeout(() => {
+        try { window.print(); } catch (_) {}
+      }, 150);
+    }
+  };
+
+  document.getElementById('recipeModalPrintBtn')?.addEventListener('click', () => {
+    if (state.activeRecipeIndex !== null) {
+      window.printRecipeCard(state.activeRecipeIndex);
+    }
+  });
+
+  document.getElementById('confirmPrintRecipeBtn')?.addEventListener('click', () => {
+    if (typeof window.print === 'function') window.print();
+  });
 
   // 4. Raw Ingredients
   async function fetchIngredients() {
@@ -522,6 +682,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderIngredients() {
     const tbody = document.getElementById('ingredientsTableBody');
+    const toolbarHistoryBtn = document.getElementById('openIngredientHistoryBtn');
+    if (toolbarHistoryBtn) toolbarHistoryBtn.disabled = state.ingredients.length === 0;
     if (!tbody) return;
     if (state.ingredients.length === 0) {
       tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No ingredients registered.</td></tr>';
@@ -543,14 +705,171 @@ document.addEventListener('DOMContentLoaded', () => {
             </span>
           </td>
           <td class="text-right">
-            <button class="btn btn-outline btn-sm" onclick="window.promptAdjustStock('${ing.id}', '${escapeHtml(ing.name)}')">
-              <i class="fa-solid fa-plus-minus"></i> Adjust
-            </button>
+            <div class="action-btn-group">
+              <button type="button" class="btn btn-outline btn-sm" onclick="window.openIngredientHistoryModal('${escapeHtml(ing.id)}')">
+                <i class="fa-solid fa-chart-line"></i> View History
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="window.promptAdjustStock('${escapeHtml(ing.id)}', '${escapeHtml(ing.name)}')">
+                <i class="fa-solid fa-plus-minus"></i> Adjust
+              </button>
+            </div>
           </td>
         </tr>
       `;
     }).join('');
   }
+
+  function populateHistoryIngredientSelect(selectedId) {
+    const select = document.getElementById('historyIngredientSelect');
+    if (!select) return;
+    select.innerHTML = state.ingredients.map(ing =>
+      `<option value="${escapeHtml(ing.id)}">${escapeHtml(ing.name)} (${escapeHtml(ing.unit)})</option>`
+    ).join('');
+    if (selectedId) select.value = selectedId;
+  }
+
+  function renderIngredientHistoryChart(history) {
+    const canvas = document.getElementById('ingredientHistoryChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const series = Array.isArray(history.series) ? history.series : [];
+    const labels = series.map(p => p.label);
+    const values = series.map(p => p.stockLevel);
+    const thresholdValues = series.map(p => p.minThreshold);
+    const unit = history.ingredient?.unit || '';
+
+    if (state.ingredientHistoryChartInstance) {
+      state.ingredientHistoryChartInstance.destroy();
+    }
+
+    state.ingredientHistoryChartInstance = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: `Stock Level (${unit || 'units'})`,
+            data: values,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.14)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: series.map(p => (p.eventCount > 0 ? 4 : 1.5)),
+            pointHoverRadius: 6
+          },
+          {
+            label: `Min Threshold (${unit || 'units'})`,
+            data: thresholdValues,
+            borderColor: '#ef4444',
+            borderDash: [6, 5],
+            borderWidth: 1.5,
+            fill: false,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, position: 'top' }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8 }, grid: { color: 'rgba(148, 163, 184, 0.12)' } },
+          y: { beginAtZero: true, grid: { color: 'rgba(148, 163, 184, 0.12)' } }
+        }
+      }
+    });
+  }
+
+  async function loadIngredientHistory(ingredientId) {
+    const titleEl = document.getElementById('ingredientHistoryModalTitle');
+    const noticeEl = document.getElementById('ingredientHistoryNotice');
+    const eventsBody = document.getElementById('ingredientHistoryEventsBody');
+    if (eventsBody) {
+      eventsBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Loading 30-day stock history...</td></tr>';
+    }
+    try {
+      const res = await fetch(`/api/ingredients/${encodeURIComponent(ingredientId)}/history?days=30`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not load stock history.');
+      }
+
+      const ing = data.ingredient || {};
+      const unit = ing.unit ? ` ${ing.unit}` : '';
+      if (titleEl) {
+        titleEl.innerHTML = `<i class="fa-solid fa-chart-line"></i> ${escapeHtml(ing.name || 'Ingredient')} — 30-Day Stock History`;
+      }
+      const summary = data.summary || {};
+      const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+      setTxt('histCurrentStock', `${summary.currentStock ?? 0}${unit}`);
+      setTxt('histMinThreshold', `${summary.minThreshold ?? 0}${unit}`);
+      setTxt('histRange', `${summary.minObserved ?? 0} – ${summary.maxObserved ?? 0}${unit}`);
+      setTxt('histMovementsCount', String(summary.totalMovements ?? 0));
+
+      if (noticeEl) {
+        if ((summary.totalMovements ?? 0) === 0) {
+          noticeEl.style.display = 'block';
+          noticeEl.textContent = `No stock adjustments, waste logs, or recipe sales were recorded for ${ing.name} in the past 30 days — showing current stock level (${summary.currentStock ?? 0}${unit}).`;
+        } else {
+          noticeEl.style.display = 'none';
+          noticeEl.textContent = '';
+        }
+      }
+
+      renderIngredientHistoryChart(data);
+
+      const events = Array.isArray(data.events) ? data.events : [];
+      if (eventsBody) {
+        if (events.length === 0) {
+          eventsBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No stock movements recorded in the past 30 days.</td></tr>';
+        } else {
+          eventsBody.innerHTML = events.map(ev => {
+            const delta = Number(ev.delta);
+            const hasDelta = Number.isFinite(delta);
+            const deltaLabel = hasDelta ? `${delta > 0 ? '+' : ''}${delta}${unit}` : 'Snapshot';
+            const deltaColor = hasDelta ? (delta >= 0 ? '#10b981' : '#ef4444') : 'var(--text-muted)';
+            const typeBadge = ev.type === 'SALE_DEPLETION'
+              ? '<span class="badge badge-info">POS Sale</span>'
+              : (ev.type === 'WASTE' ? '<span class="badge badge-danger">Waste</span>' : '<span class="badge badge-warning">Adjustment</span>');
+            return `
+              <tr>
+                <td>${escapeHtml(new Date(ev.timestamp).toLocaleString())}</td>
+                <td>${typeBadge}</td>
+                <td>${escapeHtml(ev.reason || '')}</td>
+                <td style="color:${deltaColor}; font-weight:700;">${escapeHtml(deltaLabel)}</td>
+                <td><strong>${ev.stockAfter !== undefined ? `${ev.stockAfter}${escapeHtml(unit)}` : '—'}</strong></td>
+              </tr>
+            `;
+          }).join('');
+        }
+      }
+    } catch (err) {
+      if (eventsBody) {
+        eventsBody.innerHTML = `<tr><td colspan="5" class="text-center text-danger">${escapeHtml(err.message || 'Could not load stock history.')}</td></tr>`;
+      }
+      showToast(err.message || 'Could not load ingredient history.', 'error');
+    }
+  }
+
+  window.openIngredientHistoryModal = async function(ingredientId) {
+    if (state.ingredients.length === 0) {
+      return showToast('Add an ingredient first to view stock history.', 'error');
+    }
+    const targetId = ingredientId || state.ingredients[0].id;
+    populateHistoryIngredientSelect(targetId);
+    openModal(ingredientHistoryModal);
+    await loadIngredientHistory(targetId);
+  };
+
+  document.getElementById('openIngredientHistoryBtn')?.addEventListener('click', () => {
+    window.openIngredientHistoryModal(state.ingredients[0]?.id);
+  });
+
+  document.getElementById('historyIngredientSelect')?.addEventListener('change', (e) => {
+    if (e.target.value) loadIngredientHistory(e.target.value);
+  });
 
   window.promptAdjustStock = async function(id, name) {
     const change = prompt(`Receive or adjust stock for ${name} (e.g. +1000 or -500):`);
@@ -703,27 +1022,119 @@ document.addEventListener('DOMContentLoaded', () => {
   // CATALOG, MODALS & RECEPTIONS
   // -------------------------------------------------------------
 
+  function getLowStockThreshold(item) {
+    if (item && item.minThreshold !== undefined && item.minThreshold !== null && Number.isFinite(Number(item.minThreshold))) {
+      return Number(item.minThreshold);
+    }
+    const storeThreshold = Number(state.storeInfo.lowStockThreshold);
+    return Number.isFinite(storeThreshold) ? storeThreshold : 10;
+  }
+
+  function isItemLowStock(item) {
+    const qty = Number(item?.stockQuantity ?? 0);
+    return qty < getLowStockThreshold(item);
+  }
+
+  function getFilteredProducts() {
+    const query = (state.productSearch || '').trim().toLowerCase();
+    const catFilter = state.productCategoryFilter || '';
+    return state.items.filter(item => {
+      if (catFilter && item.categoryId !== catFilter) return false;
+      if (state.lowStockOnly && !isItemLowStock(item)) return false;
+      if (query) {
+        const nameMatch = String(item.name || '').toLowerCase().includes(query);
+        const barcodeMatch = String(item.barcode || '').toLowerCase().includes(query);
+        if (!nameMatch && !barcodeMatch) return false;
+      }
+      return true;
+    });
+  }
+
+  function syncBulkToolbar(visibleItems = getFilteredProducts()) {
+    const validIds = new Set(state.items.map(i => String(i.id)));
+    for (const id of [...state.selectedProductIds]) {
+      if (!validIds.has(id)) state.selectedProductIds.delete(id);
+    }
+
+    const bulkBar = document.getElementById('productsBulkBar');
+    const countEl = document.getElementById('bulkSelectedCount');
+    const selectAllEl = document.getElementById('selectAllProductsCheckbox');
+    const selectedCount = state.selectedProductIds.size;
+
+    if (bulkBar) bulkBar.style.display = selectedCount > 0 ? 'flex' : 'none';
+    if (countEl) countEl.textContent = String(selectedCount);
+
+    if (selectAllEl) {
+      const visibleIds = visibleItems.map(i => String(i.id));
+      const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => state.selectedProductIds.has(id));
+      const someVisibleSelected = visibleIds.some(id => state.selectedProductIds.has(id));
+      selectAllEl.checked = allVisibleSelected;
+      selectAllEl.indeterminate = !allVisibleSelected && someVisibleSelected;
+      selectAllEl.disabled = visibleIds.length === 0;
+    }
+  }
+
+  function updateLowStockFilterUi() {
+    const btn = document.getElementById('lowStockFilterBtn');
+    const badge = document.getElementById('lowStockCountBadge');
+    const lowStockCount = state.items.filter(isItemLowStock).length;
+    if (badge) badge.textContent = String(lowStockCount);
+    if (btn) {
+      btn.classList.toggle('is-active', state.lowStockOnly);
+      btn.setAttribute('aria-pressed', state.lowStockOnly ? 'true' : 'false');
+    }
+  }
+
   function renderProductsTable() {
     const tbody = document.getElementById('productsTableBody');
     if (!tbody) return;
+
+    updateLowStockFilterUi();
+    const filtered = getFilteredProducts();
+    syncBulkToolbar(filtered);
+
     if (state.items.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No products in catalog.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No products in catalog.</td></tr>';
       return;
     }
 
-    tbody.innerHTML = state.items.map(item => {
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No products match the current filters.</td></tr>';
+      return;
+    }
+
+    const curr = state.storeInfo.currency || '$';
+    const showLowBadge = state.storeInfo.enableLowStockAlerts !== false;
+
+    tbody.innerHTML = filtered.map(item => {
+      const id = String(item.id);
+      const isSelected = state.selectedProductIds.has(id);
+      const lowStock = isItemLowStock(item);
+      const threshold = getLowStockThreshold(item);
       const cat = state.categories.find(c => c.id === item.categoryId);
+      const qty = Number(item.stockQuantity ?? 0);
       return `
-        <tr>
-          <td><span style="display:inline-block; width:18px; height:18px; border-radius:50%; background:${item.color || '#2E7D32'};"></span></td>
-          <td><strong>${escapeHtml(item.name)}</strong></td>
+        <tr class="${isSelected ? 'is-selected' : ''}">
+          <td>
+            <input type="checkbox" class="product-select-checkbox" data-product-id="${escapeHtml(id)}" ${isSelected ? 'checked' : ''} aria-label="Select ${escapeHtml(item.name)}">
+          </td>
+          <td><span style="display:inline-block; width:18px; height:18px; border-radius:50%; background:${escapeHtml(String(item.color || '#2E7D32'))};"></span></td>
+          <td>
+            <strong>${escapeHtml(item.name)}</strong>
+            ${item.barcode ? `<div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(item.barcode)}</div>` : ''}
+          </td>
           <td>${escapeHtml(cat?.name || 'General')}</td>
           <td><span class="badge badge-info">${escapeHtml(item.station?.replace('_', ' ') || 'HOT KITCHEN')}</span></td>
           <td>${item.prepTimeMinutes || 5} min</td>
-          <td>$${Number(item.price).toFixed(2)}</td>
-          <td>${item.stockQuantity}</td>
+          <td>${escapeHtml(curr)}${Number(item.price).toFixed(2)}</td>
+          <td>
+            <div class="stock-cell-wrap">
+              <span class="stock-qty-num ${lowStock && showLowBadge ? 'is-low' : ''}">${qty}</span>
+              ${lowStock && showLowBadge ? `<span class="badge badge-danger" title="Below minimum threshold (${threshold})"><i class="fa-solid fa-triangle-exclamation"></i> Low Stock</span>` : ''}
+            </div>
+          </td>
           <td class="text-right">
-            <button class="btn btn-icon btn-sm text-danger" onclick="window.deleteProduct('${item.id}')" title="Delete">
+            <button class="btn btn-icon btn-sm text-danger" onclick="window.deleteProduct('${escapeHtml(id)}')" title="Delete">
               <i class="fa-solid fa-trash-can"></i>
             </button>
           </td>
@@ -736,6 +1147,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!confirm('Are you sure you want to remove this product?')) return;
     try {
       await fetch(`/api/items/${id}`, { method: 'DELETE' });
+      state.selectedProductIds.delete(String(id));
       showToast('Product removed', 'success');
       fetchItems();
       fetchRecipeProfitability();
@@ -757,13 +1169,108 @@ document.addEventListener('DOMContentLoaded', () => {
   function populateCategorySelects() {
     const prodCatSelect = document.getElementById('modalProductCategory');
     const filterSelect = document.getElementById('categoryFilterSelect');
+    const bulkCatSelect = document.getElementById('bulkCategorySelect');
     if (prodCatSelect) {
-      prodCatSelect.innerHTML = state.categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+      prodCatSelect.innerHTML = state.categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
     }
     if (filterSelect) {
-      filterSelect.innerHTML = '<option value="">All Categories</option>' + state.categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+      const prev = filterSelect.value;
+      filterSelect.innerHTML = '<option value="">All Categories</option>' + state.categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
+      if (prev) filterSelect.value = prev;
+    }
+    if (bulkCatSelect) {
+      const prev = bulkCatSelect.value;
+      bulkCatSelect.innerHTML = '<option value="">Keep Category</option>' + state.categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
+      if (prev) bulkCatSelect.value = prev;
     }
   }
+
+  document.getElementById('productSearchInput')?.addEventListener('input', (e) => {
+    state.productSearch = e.target.value || '';
+    renderProductsTable();
+  });
+
+  document.getElementById('categoryFilterSelect')?.addEventListener('change', (e) => {
+    state.productCategoryFilter = e.target.value || '';
+    renderProductsTable();
+  });
+
+  document.getElementById('lowStockFilterBtn')?.addEventListener('click', () => {
+    state.lowStockOnly = !state.lowStockOnly;
+    renderProductsTable();
+  });
+
+  document.getElementById('selectAllProductsCheckbox')?.addEventListener('change', (e) => {
+    const visible = getFilteredProducts();
+    if (e.target.checked) {
+      visible.forEach(item => state.selectedProductIds.add(String(item.id)));
+    } else {
+      visible.forEach(item => state.selectedProductIds.delete(String(item.id)));
+    }
+    renderProductsTable();
+  });
+
+  document.getElementById('productsTableBody')?.addEventListener('change', (e) => {
+    const checkbox = e.target.closest('.product-select-checkbox');
+    if (!checkbox) return;
+    const id = checkbox.dataset.productId;
+    if (!id) return;
+    if (checkbox.checked) state.selectedProductIds.add(id);
+    else state.selectedProductIds.delete(id);
+    const row = checkbox.closest('tr');
+    if (row) row.classList.toggle('is-selected', checkbox.checked);
+    syncBulkToolbar();
+  });
+
+  document.getElementById('clearBulkSelectionBtn')?.addEventListener('click', () => {
+    state.selectedProductIds.clear();
+    renderProductsTable();
+  });
+
+  document.getElementById('applyBulkUpdateBtn')?.addEventListener('click', async () => {
+    const ids = [...state.selectedProductIds];
+    const categoryId = document.getElementById('bulkCategorySelect')?.value || '';
+    const station = document.getElementById('bulkStationSelect')?.value || '';
+    if (ids.length === 0) {
+      return showToast('Select at least one product to update.', 'error');
+    }
+    if (!categoryId && !station) {
+      return showToast('Choose a target category or kitchen station.', 'error');
+    }
+
+    const btn = document.getElementById('applyBulkUpdateBtn');
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating…';
+    }
+    try {
+      const payload = { ids };
+      if (categoryId) payload.categoryId = categoryId;
+      if (station) payload.station = station;
+      const res = await fetch('/api/items/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Bulk update failed.');
+      }
+      state.selectedProductIds.clear();
+      if (document.getElementById('bulkCategorySelect')) document.getElementById('bulkCategorySelect').value = '';
+      if (document.getElementById('bulkStationSelect')) document.getElementById('bulkStationSelect').value = '';
+      showToast(`Updated ${data.updatedCount ?? ids.length} catalog item(s).`, 'success');
+      await Promise.all([fetchItems(), fetchRecipeProfitability()]);
+    } catch (err) {
+      showToast(err.message || 'Bulk update failed.', 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  });
 
   function renderReceiptsTable() {
     const tbody = document.getElementById('receiptsTableBody');
@@ -1004,10 +1511,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const currInput = document.getElementById('settingCurrency');
     const taxInput = document.getElementById('settingTaxRate');
     const addrInput = document.getElementById('settingAddress');
+    const phoneInput = document.getElementById('settingPhone');
+    const emailInput = document.getElementById('settingSupportEmail');
+    const hoursInput = document.getElementById('settingBusinessHours');
+    const thresholdInput = document.getElementById('settingLowStockThreshold');
+    const lowStockAlertsInput = document.getElementById('settingLowStockAlerts');
+    const autoDepleteInput = document.getElementById('settingAutoDeplete');
+    const acceptOnlineInput = document.getElementById('settingAcceptOnlineOrders');
+    const prepTimeInput = document.getElementById('settingDefaultPrepTime');
+    const dineInInput = document.getElementById('settingAllowDineIn');
+    const takeawayInput = document.getElementById('settingAllowTakeaway');
+    const deliveryInput = document.getElementById('settingAllowDelivery');
+    const receiptFooterInput = document.getElementById('settingReceiptFooter');
+
     if (nameInput) nameInput.value = state.storeInfo.name || '';
     if (currInput) currInput.value = state.storeInfo.currency || '';
     if (taxInput) taxInput.value = state.storeInfo.taxRate ?? '';
     if (addrInput) addrInput.value = state.storeInfo.address || '';
+    if (phoneInput) phoneInput.value = state.storeInfo.phone || '';
+    if (emailInput) emailInput.value = state.storeInfo.supportEmail || '';
+    if (hoursInput) hoursInput.value = state.storeInfo.businessHours || '';
+    if (thresholdInput) thresholdInput.value = state.storeInfo.lowStockThreshold ?? 10;
+    if (lowStockAlertsInput) lowStockAlertsInput.checked = state.storeInfo.enableLowStockAlerts !== false;
+    if (autoDepleteInput) autoDepleteInput.checked = state.storeInfo.autoDepleteOnSync !== false;
+    if (acceptOnlineInput) acceptOnlineInput.checked = state.storeInfo.acceptOnlineOrders !== false;
+    if (prepTimeInput) prepTimeInput.value = state.storeInfo.defaultPrepTimeMinutes ?? 15;
+    if (dineInInput) dineInInput.checked = state.storeInfo.allowDineIn !== false;
+    if (takeawayInput) takeawayInput.checked = state.storeInfo.allowTakeaway !== false;
+    if (deliveryInput) deliveryInput.checked = state.storeInfo.allowDelivery !== false;
+    if (receiptFooterInput) receiptFooterInput.value = state.storeInfo.receiptFooter || '';
     updateTaxPreview();
   }
 
@@ -1035,6 +1567,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.storeInfo = { ...state.storeInfo, ...data.storeInfo };
       if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
       populateSettingsForm();
+      renderProductsTable();
       if (saveState) saveState.textContent = 'Saved to cloud just now';
       showToast(successMessage, 'success');
       return true;
@@ -1051,8 +1584,15 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const name = document.getElementById('settingStoreName').value.trim();
     const address = document.getElementById('settingAddress').value.trim();
+    const phone = document.getElementById('settingPhone')?.value.trim() || '';
+    const supportEmail = document.getElementById('settingSupportEmail')?.value.trim() || '';
+    const businessHours = document.getElementById('settingBusinessHours')?.value.trim() || '';
     if (!name) return showToast('Enter a restaurant name.', 'error');
-    await saveStoreSettings({ name, address }, 'saveStoreSettingsBtn', 'Store profile saved.');
+    await saveStoreSettings(
+      { name, address, phone, supportEmail, businessHours },
+      'saveStoreSettingsBtn',
+      'Store profile saved.'
+    );
   });
 
   document.getElementById('storeSettingsFormTax')?.addEventListener('submit', async (e) => {
@@ -1063,6 +1603,46 @@ document.addEventListener('DOMContentLoaded', () => {
       return showToast('Enter a currency symbol and a tax rate between 0 and 100%.', 'error');
     }
     await saveStoreSettings({ currency, taxRate }, 'saveTaxSettingsBtn', 'Currency and tax settings saved.');
+  });
+
+  document.getElementById('storeSettingsFormInventory')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const lowStockThreshold = Number(document.getElementById('settingLowStockThreshold')?.value);
+    const enableLowStockAlerts = Boolean(document.getElementById('settingLowStockAlerts')?.checked);
+    const autoDepleteOnSync = Boolean(document.getElementById('settingAutoDeplete')?.checked);
+    if (!Number.isFinite(lowStockThreshold) || lowStockThreshold < 0 || lowStockThreshold > 100000) {
+      return showToast('Enter a valid low-stock threshold (0 to 100,000).', 'error');
+    }
+    await saveStoreSettings(
+      { lowStockThreshold, enableLowStockAlerts, autoDepleteOnSync },
+      'saveInventorySettingsBtn',
+      'Inventory and alert settings saved.'
+    );
+  });
+
+  document.getElementById('storeSettingsFormOperations')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const acceptOnlineOrders = Boolean(document.getElementById('settingAcceptOnlineOrders')?.checked);
+    const defaultPrepTimeMinutes = Number(document.getElementById('settingDefaultPrepTime')?.value);
+    const allowDineIn = Boolean(document.getElementById('settingAllowDineIn')?.checked);
+    const allowTakeaway = Boolean(document.getElementById('settingAllowTakeaway')?.checked);
+    const allowDelivery = Boolean(document.getElementById('settingAllowDelivery')?.checked);
+    const receiptFooter = document.getElementById('settingReceiptFooter')?.value.trim() || '';
+    if (!Number.isFinite(defaultPrepTimeMinutes) || defaultPrepTimeMinutes < 1 || defaultPrepTimeMinutes > 180) {
+      return showToast('Default prep time must be between 1 and 180 minutes.', 'error');
+    }
+    await saveStoreSettings(
+      {
+        acceptOnlineOrders,
+        defaultPrepTimeMinutes,
+        allowDineIn,
+        allowTakeaway,
+        allowDelivery,
+        receiptFooter
+      },
+      'saveOperationsSettingsBtn',
+      'Storefront and kitchen settings saved.'
+    );
   });
 
   document.getElementById('settingTaxRate')?.addEventListener('input', updateTaxPreview);
@@ -1119,4 +1699,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootOpenPosApp);
+} else {
+  bootOpenPosApp();
+}

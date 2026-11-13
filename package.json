@@ -2,9 +2,12 @@
   "name": "openpos",
   "version": "1.0.0",
   "description": "OpenPOS - Point of Sale & Back Office",
-  "main": "OpenPOS-Backoffice/server.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node OpenPOS-Backoffice/server.js",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node --check server.js && node --check api/index.js && node --check api/lib/catalog-repository.js && node --check api/lib/ingredient-history.js && node --check api/lib/pin-crypto.js && node --check api/lib/peru-payroll-engine.js && node --check api/lib/workforce-repository.js",
+    "lint": "node --check server.js && node --check api/index.js && node --check api/lib/catalog-repository.js && node --check api/lib/ingredient-history.js && node --check api/lib/pin-crypto.js && node --check api/lib/peru-payroll-engine.js && node --check api/lib/workforce-repository.js && node --check public/auth-client.js && node --check public/workforce-peru.js && node --check public/app.js && node --check public/order.js && node --check public/kitchen.js",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

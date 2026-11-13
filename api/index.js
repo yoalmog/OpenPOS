@@ -10,6 +10,10 @@ const { getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOpera
 const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
 const { validateSyncEvent } = require('./lib/sync-validation');
 const { listShifts, getOpenShift, startShift, closeShift } = require('./lib/shift-repository');
+const { validateBulkUpdatePayload, bulkUpdateItemsPg, mergeStoreSettings, sanitizePublicStoreInfo } = require('./lib/catalog-repository');
+const { buildIngredientStockHistory } = require('./lib/ingredient-history');
+const { DEFAULT_PERU_RULE, selectEffectivePeruRule } = require('./lib/peru-payroll-engine');
+const workforceRepo = require('./lib/workforce-repository');
 
 const app = express();
 
@@ -45,6 +49,18 @@ const DEFAULT_DATA = {
     currency: "$",
     taxRate: 17.0,
     address: "Online Store / Cloud Back Office",
+    phone: "",
+    supportEmail: "",
+    businessHours: "07:00 – 22:00",
+    receiptFooter: "Thank you for dining with us!",
+    lowStockThreshold: 10,
+    autoDepleteOnSync: true,
+    enableLowStockAlerts: true,
+    acceptOnlineOrders: true,
+    defaultPrepTimeMinutes: 15,
+    allowDineIn: true,
+    allowTakeaway: true,
+    allowDelivery: true,
     apiKey: null
   },
   categories: [
@@ -430,7 +446,17 @@ const EMPTY_PRODUCTION_DATA = {
   checklists: [],
   shifts: [],
   receipts: [],
-  auditLogs: []
+  auditLogs: [],
+  branches: [],
+  peruLaborRules: [{ ...DEFAULT_PERU_RULE }],
+  workforceEmployees: [],
+  employeeContracts: [],
+  shiftSchedules: [],
+  shiftSwapRequests: [],
+  attendanceLogs: [],
+  leaveRequests: [],
+  payrollPeriods: [],
+  payrollEntries: []
 };
 let inMemoryStore = JSON.parse(JSON.stringify(
   isProductionRuntime ? EMPTY_PRODUCTION_DATA : DEFAULT_DATA
@@ -456,11 +482,13 @@ function loadFileData() {
       if (!inMemoryStore.checklists) inMemoryStore.checklists = JSON.parse(JSON.stringify(DEFAULT_DATA.checklists));
       if (!inMemoryStore.items || inMemoryStore.items.length === 0) inMemoryStore.items = JSON.parse(JSON.stringify(DEFAULT_DATA.items));
       if (!inMemoryStore.categories || inMemoryStore.categories.length === 0) inMemoryStore.categories = JSON.parse(JSON.stringify(DEFAULT_DATA.categories));
+      workforceRepo.ensureLocalWorkforceState(inMemoryStore);
       return inMemoryStore;
     }
   } catch (err) {
     console.error("[FileStore] Read error:", err.message);
   }
+  workforceRepo.ensureLocalWorkforceState(inMemoryStore);
   saveFileData(inMemoryStore);
   return inMemoryStore;
 }
@@ -488,7 +516,7 @@ async function initPgTables() {
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Public bootstrap endpoint for Firebase Android and legacy Supabase clients.
+// Public bootstrap endpoint for Firebase Android and Supabase Back Office clients.
 app.get("/api/auth-config", (req, res) => {
   res.set("Cache-Control", "no-store");
   const firebaseConfigured = Boolean(FIREBASE_PROJECT_ID && FIREBASE_API_KEY);
@@ -500,7 +528,8 @@ app.get("/api/auth-config", (req, res) => {
     firebaseProjectId: FIREBASE_PROJECT_ID,
     supabaseConfigured,
     supabaseUrl: SUPABASE_URL,
-    supabaseAnonKey: SUPABASE_ANON_KEY
+    supabaseAnonKey: SUPABASE_ANON_KEY,
+    localPreviewAllowed: !isProductionRuntime && !firebaseConfigured && !supabaseConfigured
   });
 });
 
@@ -598,11 +627,25 @@ function isPublicStorefrontRequest(req) {
 
 app.use("/api", (req, res, next) => {
   if (isPublicStorefrontRequest(req)) return next();
+  const firebaseConfigured = Boolean(FIREBASE_PROJECT_ID && FIREBASE_API_KEY);
+  const supabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+  if (!isProductionRuntime && !firebaseConfigured && !supabaseConfigured) {
+    req.authUser = {
+      id: OPENPOS_OWNER_USER_ID || "local-preview-owner",
+      email: OPENPOS_OWNER_EMAIL,
+      email_verified: true,
+      app_metadata: { role: "owner" },
+      authProvider: "local-preview"
+    };
+    return next();
+  }
   return requireApiAuth(req, res, (error) => {
     if (error) return next(error);
-    // Until employee permissions are implemented, authenticated API access is owner/admin only.
-    // This prevents ordinary authenticated accounts from reaching routes that lack local role checks.
-    if (!hasAdminRole(req.authUser)) {
+    const pathname = (req.originalUrl || req.path).split("?")[0];
+    const isEmployeeSelfService = pathname === "/api/workforce/me" || pathname.startsWith("/api/workforce/me/");
+    // Non-admin employees are strictly restricted to their own self-service endpoints.
+    // Every other Back Office / POS route remains owner/admin only.
+    if (!hasAdminRole(req.authUser) && !isEmployeeSelfService) {
       return res.status(403).json({ error: "Forbidden", message: "Owner or admin role is required." });
     }
     return next();
@@ -796,6 +839,7 @@ app.get('/api/status', async (req, res) => {
       onlineOrders: (local.onlineOrders || []).length
     };
   }
+  const publicStore = sanitizePublicStoreInfo(storeInfo);
   res.json({
     status: "online",
     storageEngine: databaseConnected ? "PostgreSQL (connection verified)" : "Local File System (development only)",
@@ -804,12 +848,27 @@ app.get('/api/status', async (req, res) => {
     system: "OpenPOS Restaurant & Cafe Cloud Edition",
     version: "3.5.0",
     timestamp: Date.now(),
-    storeName: storeInfo?.name || null,
-    storeAddress: storeInfo?.address || null,
-    currency: storeInfo?.currency || null,
-    taxRate: storeInfo?.taxRate ?? null,
+    storeName: publicStore?.name || null,
+    storeAddress: publicStore?.address || null,
+    currency: publicStore?.currency || null,
+    taxRate: publicStore?.taxRate ?? null,
+    storeSettings: publicStore,
     counts
   });
+});
+
+app.get('/api/store', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ error: "Persistent store settings are unavailable." });
+  }
+  try {
+    const storeInfo = pgPool ? await getStoreSettings(pgPool) : loadFileData().storeInfo;
+    return res.json({ success: true, storeInfo: sanitizePublicStoreInfo(storeInfo || {}) });
+  } catch (error) {
+    console.error("[DB] Store settings read failed:", error.message);
+    return res.status(503).json({ error: "Store settings could not be loaded." });
+  }
 });
 
 app.post('/api/store', async (req, res) => {
@@ -820,39 +879,33 @@ app.post('/api/store', async (req, res) => {
   if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
     return res.status(503).json({ error: "Persistent store settings are unavailable." });
   }
-  const { name, currency, taxRate, address } = req.body || {};
+  const updates = req.body || {};
   let storeInfo;
   if (pgPool) {
     try {
       const current = await getStoreSettings(pgPool) || {};
-      const updated = { ...current };
-      if (name !== undefined) updated.name = String(name);
-      if (currency !== undefined) updated.currency = String(currency);
-      if (taxRate !== undefined) {
-        const parsedTaxRate = Number(taxRate);
-        if (!Number.isFinite(parsedTaxRate) || parsedTaxRate < 0 || parsedTaxRate > 100) {
-          return res.status(400).json({ error: "taxRate must be between 0 and 100." });
-        }
-        updated.taxRate = parsedTaxRate;
+      const merged = mergeStoreSettings(current, updates);
+      if (!merged.valid) {
+        return res.status(merged.status).json({ error: merged.error });
       }
-      if (address !== undefined) updated.address = String(address);
-      storeInfo = await saveStoreSettings(pgPool, updated);
+      storeInfo = await saveStoreSettings(pgPool, merged.settings);
     } catch (error) {
       console.error("[DB] Store settings save failed:", error.message);
       return res.status(503).json({ error: "Store settings could not be saved." });
     }
   } else {
     const db = loadFileData();
-    if (name !== undefined) db.storeInfo.name = name;
-    if (currency !== undefined) db.storeInfo.currency = currency;
-    if (taxRate !== undefined) db.storeInfo.taxRate = Number(taxRate);
-    if (address !== undefined) db.storeInfo.address = address;
+    const merged = mergeStoreSettings(db.storeInfo || {}, updates);
+    if (!merged.valid) {
+      return res.status(merged.status).json({ error: merged.error });
+    }
+    db.storeInfo = merged.settings;
     saveFileData(db);
     storeInfo = db.storeInfo;
   }
-  try { await logAudit("STORE_CONFIG_UPDATED", { name, currency, taxRate }, req); }
+  try { await logAudit("STORE_CONFIG_UPDATED", Object.keys(updates), req); }
   catch (error) { console.error("[Audit] Store config audit write failed:", error.message); }
-  res.json({ success: true, storeInfo });
+  res.json({ success: true, storeInfo: sanitizePublicStoreInfo(storeInfo) });
 });
 
 // -------------------------------------------------------------
@@ -1084,6 +1137,46 @@ app.post('/api/items', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/items/bulk-update', requireApiKey, async (req, res) => {
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
+  const validation = validateBulkUpdatePayload(req.body);
+  if (!validation.valid) {
+    return res.status(validation.status).json({ error: validation.error });
+  }
+  const { ids, categoryId, station } = validation;
+  try {
+    let updatedItems;
+    if (pgPool) {
+      updatedItems = await bulkUpdateItemsPg(pgPool, { ids, categoryId, station });
+    } else {
+      const db = loadFileData();
+      const idSet = new Set(ids);
+      updatedItems = [];
+      db.items = (db.items || []).map(item => {
+        if (!idSet.has(String(item.id))) return item;
+        const nextItem = {
+          ...item,
+          ...(categoryId ? { categoryId } : {}),
+          ...(station ? { station } : {})
+        };
+        updatedItems.push(nextItem);
+        return nextItem;
+      });
+      saveFileData(db);
+    }
+    if (updatedItems.length === 0) {
+      return res.status(404).json({ error: "No matching products were found to update." });
+    }
+    try { await logAudit("ITEMS_BULK_UPDATED", { count: updatedItems.length, ids, categoryId, station }, req); }
+    catch (error) { console.error("[Audit] Bulk item update audit write failed:", error.message); }
+    return res.json({ success: true, updatedCount: updatedItems.length, items: updatedItems });
+  } catch (error) {
+    console.error("[DB] Bulk item update failed:", error.message);
+    return res.status(503).json({ error: "Products could not be bulk updated persistently." });
+  }
+});
+
 app.delete('/api/items/:id', requireApiKey, async (req, res) => {
   await initPgTables();
   if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent catalog storage is unavailable." });
@@ -1151,6 +1244,63 @@ app.post('/api/ingredients', requireApiKey, async (req, res) => {
   }
 });
 
+app.get('/api/ingredients/:id/history', async (req, res) => {
+  await initPgTables();
+  if (isProductionRuntime && (!pgPool || !tablesInitialized)) {
+    return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
+  }
+  const days = Math.max(1, Math.min(Number(req.query.days) || 30, 90));
+  const now = Date.now();
+  const since = now - days * 24 * 60 * 60 * 1000;
+  try {
+    let ingredient = null;
+    let auditLogs = [];
+    let wasteLogs = [];
+    let receipts = [];
+    let recipes = [];
+
+    if (pgPool) {
+      const [ingredientsList, loadedAudit, loadedWaste, loadedReceipts, loadedRecipes] = await Promise.all([
+        listIngredients(pgPool),
+        listOperationalRecords(pgPool, "audit_logs", 1000),
+        listOperationalRecords(pgPool, "waste_logs", 1000),
+        listReceipts(pgPool, { from: since }),
+        listRecipes(pgPool)
+      ]);
+      ingredient = ingredientsList.find(i => String(i.id) === String(req.params.id)) || null;
+      auditLogs = loadedAudit;
+      wasteLogs = loadedWaste;
+      receipts = loadedReceipts;
+      recipes = loadedRecipes;
+    } else {
+      const db = loadFileData();
+      ingredient = (db.ingredients || []).find(i => String(i.id) === String(req.params.id)) || null;
+      auditLogs = db.auditLogs || [];
+      wasteLogs = db.wasteLogs || [];
+      receipts = (db.receipts || []).filter(r => Number(r.timestamp) >= since);
+      recipes = db.recipes || [];
+    }
+
+    if (!ingredient) {
+      return res.status(404).json({ error: "Ingredient not found." });
+    }
+
+    const history = buildIngredientStockHistory({
+      ingredient,
+      auditLogs,
+      wasteLogs,
+      receipts,
+      recipes,
+      days,
+      now
+    });
+    return res.json({ success: true, ...history });
+  } catch (error) {
+    console.error("[DB] Ingredient history failed:", error.message);
+    return res.status(503).json({ error: "Could not load ingredient stock history." });
+  }
+});
+
 app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
   await initPgTables();
   if (isProductionRuntime && (!pgPool || !tablesInitialized)) return res.status(503).json({ error: "Persistent ingredient storage is unavailable." });
@@ -1162,19 +1312,32 @@ app.put('/api/ingredients/:id/stock', requireApiKey, async (req, res) => {
   }
   try {
     let ing;
-    if (pgPool) ing = await updateIngredientStock(pgPool, req.params.id, { change, newStock });
-    else {
+    let previousStock = null;
+    if (pgPool) {
+      const existing = await pgPool.query("SELECT current_stock FROM ingredients WHERE id = $1", [req.params.id]);
+      if (existing.rowCount) previousStock = Number(existing.rows[0].current_stock || 0);
+      ing = await updateIngredientStock(pgPool, req.params.id, { change, newStock });
+    } else {
       const db = loadFileData();
       const local = (db.ingredients || []).find(i => i.id === req.params.id);
       if (local) {
+        previousStock = Number(local.currentStock || 0);
         if (newStock !== undefined) local.currentStock = Number(newStock);
-        else local.currentStock = Math.max(0, Number(local.currentStock || 0) + Number(change));
+        else local.currentStock = Math.max(0, previousStock + Number(change));
         saveFileData(db);
         ing = local;
       }
     }
     if (!ing) return res.status(404).json({ error: "Ingredient not found." });
-    await logAudit("INGREDIENT_STOCK_ADJUSTED", { ingredient: ing.name, newStock: ing.currentStock, reason }, req);
+    const delta = previousStock !== null ? Math.round((Number(ing.currentStock) - previousStock) * 100) / 100 : null;
+    await logAudit("INGREDIENT_STOCK_ADJUSTED", {
+      ingredientId: ing.id,
+      ingredient: ing.name,
+      previousStock,
+      delta,
+      newStock: ing.currentStock,
+      reason: reason || "Manual Adjustment"
+    }, req);
     return res.json({ success: true, ingredient: ing });
   } catch (error) {
     console.error("[DB] Ingredient stock update failed:", error.message);
@@ -1310,13 +1473,23 @@ app.get('/api/recipes/profitability', async (req, res) => {
       profitMarginPct: Math.round(profitMarginPct * 10) / 10,
       healthStatus,
       ingredients: ingredientDetails,
+      instructions: recipe?.instructions || "",
+      allergens: recipe?.allergens || "",
       hasRecipe: !!recipe
     };
   });
 
+  let storeCurrency = db?.storeInfo?.currency || "$";
+  if (pgPool) {
+    try {
+      const settings = await getStoreSettings(pgPool);
+      if (settings?.currency) storeCurrency = settings.currency;
+    } catch (_) {}
+  }
+
   res.json({
     success: true,
-    currency: db.storeInfo.currency,
+    currency: storeCurrency,
     averageFoodCostPct: Math.round(matrix.filter(m => m.hasRecipe).reduce((acc, m) => acc + m.foodCostPct, 0) / (matrix.filter(m => m.hasRecipe).length || 1) * 10) / 10,
     items: matrix
   });
@@ -1437,10 +1610,14 @@ app.post('/api/online-orders', async (req, res) => {
   if (!storeSettings || !Number.isFinite(Number(storeSettings.taxRate))) {
     return res.status(503).json({ error: "Store tax settings have not been configured." });
   }
+  if (storeSettings.acceptOnlineOrders === false) {
+    return res.status(503).json({ error: "Online ordering is currently paused by the store." });
+  }
   const tax = Math.round(subtotal * (Number(storeSettings.taxRate) / 100) * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   const now = Date.now();
   const orderNumber = `W-${Math.floor(100 + Math.random() * 900)}`;
+  const leadMinutes = Number.isFinite(Number(storeSettings.defaultPrepTimeMinutes)) ? Number(storeSettings.defaultPrepTimeMinutes) : 15;
 
   const order = {
     id: `ord_${now}_${Math.random().toString(36).substr(2, 4)}`,
@@ -1450,7 +1627,7 @@ app.post('/api/online-orders', async (req, res) => {
     tableNumber: tableNumber || null,
     customerName: customerName.trim(),
     customerPhone: customerPhone || "",
-    pickupTime: pickupTime || "Immediate (15-20 min)",
+    pickupTime: pickupTime || `Immediate (~${leadMinutes} min)`,
     notes: notes || "",
     subtotal,
     tax,
@@ -1672,27 +1849,21 @@ app.post('/api/shifts/:id/close', requireApiKey, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 9. Smart Staffing & Shift Demand Forecast API
+// 9. Smart Staffing, Workforce Management & Peru Payroll API
 // -------------------------------------------------------------
-app.get('/api/forecast', async (req, res) => {
-  await initPgTables();
+async function computeHourlyForecastData() {
   const now = new Date();
   const sevenDays = 7 * 24 * 60 * 60 * 1000;
   const since = now.getTime() - sevenDays;
   let hourlyCounts = Array(24).fill(0);
-  try {
-    if (pgPool) {
-      const observed = await getHourlyReceiptCounts(pgPool, since);
-      observed.forEach(row => { if (row.hour >= 0 && row.hour < 24) hourlyCounts[row.hour] = row.orders; });
-    } else if (isProductionRuntime) {
-      return res.status(503).json({ error: "Persistent forecast data is unavailable." });
-    } else {
-      (loadFileData().receipts || []).filter(receipt => Number(receipt.timestamp) >= since && !receipt.isRefund)
-        .forEach(receipt => { const hour = new Date(receipt.timestamp).getHours(); hourlyCounts[hour]++; });
-    }
-  } catch (error) {
-    console.error("[Forecast] Receipt history query failed:", error.message);
-    return res.status(503).json({ error: "Forecast data is temporarily unavailable." });
+  if (pgPool) {
+    const observed = await getHourlyReceiptCounts(pgPool, since);
+    observed.forEach(row => { if (row.hour >= 0 && row.hour < 24) hourlyCounts[row.hour] = row.orders; });
+  } else if (isProductionRuntime) {
+    throw new Error("Persistent forecast data is unavailable.");
+  } else {
+    (loadFileData().receipts || []).filter(receipt => Number(receipt.timestamp) >= since && !receipt.isRefund)
+      .forEach(receipt => { const hour = new Date(receipt.timestamp).getHours(); hourlyCounts[hour]++; });
   }
   const hourlyForecast = [];
   for (let hour = 7; hour <= 22; hour++) {
@@ -1708,13 +1879,420 @@ app.get('/api/forecast', async (req, res) => {
     });
   }
   const peak = hourlyForecast.reduce((best, current) => current.predictedOrders > best.predictedOrders ? current : best, hourlyForecast[0]);
-  return res.json({
+  return {
     day: now.toLocaleDateString(undefined, { weekday: 'long' }),
     historicalWindowDays: 7,
     totalPredictedOrders: hourlyForecast.reduce((sum, hour) => sum + hour.predictedOrders, 0),
     peakHour: peak?.predictedOrders > 0 ? peak.hour : null,
     hourlyForecast
-  });
+  };
+}
+
+function getWfContext() {
+  if (pgPool) return { pool: pgPool, store: null };
+  if (isProductionRuntime) return null;
+  return { pool: null, store: loadFileData() };
+}
+
+function persistWfLocal(ctx) {
+  if (!ctx?.pool && ctx?.store) saveFileData(ctx.store);
+}
+
+app.get('/api/forecast', async (req, res) => {
+  await initPgTables();
+  try {
+    return res.json(await computeHourlyForecastData());
+  } catch (error) {
+    console.error("[Forecast] Receipt history query failed:", error.message);
+    return res.status(503).json({ error: "Forecast data is temporarily unavailable." });
+  }
+});
+
+// Employee self-service routes (scoped strictly to authenticated user; also returns isAdmin status)
+app.get('/api/workforce/me', async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const profile = await workforceRepo.getSelfServiceProfile(ctx, req.authUser);
+    return res.json({
+      isAdmin: hasAdminRole(req.authUser),
+      userEmail: req.authUser?.email || "",
+      profile
+    });
+  } catch (error) {
+    console.error("[Workforce] Self-service lookup failed:", error.message);
+    return res.status(503).json({ error: "Workforce profile is temporarily unavailable." });
+  }
+});
+
+app.post('/api/workforce/me/leave', async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const profile = await workforceRepo.getSelfServiceProfile(ctx, req.authUser);
+    if (!profile?.employee) return res.status(403).json({ error: "No linked employee profile found." });
+    const leave = await workforceRepo.createLeaveRequest(ctx, { ...req.body, employeeId: profile.employee.id });
+    persistWfLocal(ctx);
+    return res.status(201).json({ success: true, leave });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/workforce/me/swap', async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const profile = await workforceRepo.getSelfServiceProfile(ctx, req.authUser);
+    if (!profile?.employee) return res.status(403).json({ error: "No linked employee profile found." });
+    const ownShift = (profile.shifts || []).find(s => s.id === req.body?.shiftId);
+    if (!ownShift) return res.status(403).json({ error: "You can only request swaps for your own published shifts." });
+    const swap = await workforceRepo.createSwapRequest(ctx, { ...req.body, requesterId: profile.employee.id });
+    persistWfLocal(ctx);
+    return res.status(201).json({ success: true, swap });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+// Admin / Manager Workforce Dashboard & Analytics
+app.get('/api/workforce/dashboard', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const [receipts, forecast] = await Promise.all([
+      listReceiptsForApi().catch(() => []),
+      computeHourlyForecastData().catch(() => ({ hourlyForecast: [] }))
+    ]);
+    const dashboard = await workforceRepo.buildWorkforceDashboard({ ...ctx, receipts, forecast });
+    return res.json(dashboard);
+  } catch (error) {
+    console.error("[Workforce] Dashboard aggregation failed:", error.message);
+    return res.status(503).json({ error: "Workforce dashboard is temporarily unavailable." });
+  }
+});
+
+// Multi-Branch Configuration & REMYPE Metadata
+app.get('/api/workforce/branches', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listBranches(ctx)); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/branches', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const branch = await workforceRepo.saveBranch(ctx, req.body);
+    persistWfLocal(ctx);
+    await logAudit("WORKFORCE_BRANCH_SAVED", { branchId: branch.id, name: branch.name, laborRegime: branch.laborRegime }, req);
+    return res.json({ success: true, branch });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Effective-Dated Peru Labor Law Rules
+app.get('/api/workforce/rules', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listPeruLaborRules(ctx)); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/rules', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const rule = await workforceRepo.savePeruLaborRule(ctx, req.body);
+    persistWfLocal(ctx);
+    await logAudit("PERU_LABOR_RULE_SAVED", { ruleId: rule.id, effectiveFrom: rule.effectiveFrom, rmv: rule.rmv, uit: rule.uit }, req);
+    return res.json({ success: true, rule });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Employees & Historical Contracts (never returns hashed PINs)
+app.get('/api/workforce/employees', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listEmployees(ctx, { branchId: req.query.branchId })); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/employees', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const employee = await workforceRepo.saveEmployee(ctx, req.body);
+    persistWfLocal(ctx);
+    await logAudit("WORKFORCE_EMPLOYEE_SAVED", { employeeId: employee.id, fullName: employee.fullName, role: employee.role }, req);
+    return res.json({ success: true, employee });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/workforce/contracts', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listContracts(ctx, { employeeId: req.query.employeeId })); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/contracts', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const contract = await workforceRepo.saveContract(ctx, req.body);
+    persistWfLocal(ctx);
+    await logAudit("WORKFORCE_CONTRACT_SAVED", { contractId: contract.id, employeeId: contract.employeeId, laborRegime: contract.laborRegime }, req);
+    return res.json({ success: true, contract });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Shift Scheduling, Overlap Detection, Swaps & Publishing
+app.get('/api/workforce/shifts', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    return res.json(await workforceRepo.listShifts(ctx, {
+      branchId: req.query.branchId,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
+    }));
+  } catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/shifts', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const result = await workforceRepo.saveShift(ctx, req.body);
+    persistWfLocal(ctx);
+    return res.json({ success: true, ...result });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/shifts/publish', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const published = await workforceRepo.publishShifts(ctx, req.body || {});
+    persistWfLocal(ctx);
+    await logAudit("SHIFTS_PUBLISHED", { count: published.length }, req);
+    return res.json({ success: true, count: published.length, shifts: published });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/workforce/swaps', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listSwaps(ctx)); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/swaps', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const swap = await workforceRepo.createSwapRequest(ctx, req.body);
+    persistWfLocal(ctx);
+    return res.status(201).json({ success: true, swap });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/swaps/:id/decide', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const swap = await workforceRepo.decideSwapRequest(ctx, {
+      id: req.params.id,
+      decision: req.body?.decision,
+      reviewedBy: req.authUser?.email || "Manager"
+    });
+    if (!swap) return res.status(404).json({ error: "Swap request not found." });
+    persistWfLocal(ctx);
+    await logAudit("SHIFT_SWAP_DECIDED", { swapId: swap.id, status: swap.status }, req);
+    return res.json({ success: true, swap });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Time & Attendance + Hashed PIN Kiosk Clock-In/Out
+app.get('/api/workforce/attendance', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    return res.json(await workforceRepo.listAttendance(ctx, {
+      employeeId: req.query.employeeId,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
+    }));
+  } catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/kiosk/clock', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const result = await workforceRepo.recordPinClockAction(ctx, req.body || {});
+    persistWfLocal(ctx);
+    await logAudit("KIOSK_CLOCK_ACTION", { employeeId: result.log.employeeId, status: result.log.status }, req);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
+  }
+});
+
+app.post('/api/workforce/attendance/:id/overtime', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const log = await workforceRepo.approveAttendanceOvertime(ctx, {
+      id: req.params.id,
+      approved: req.body?.approved !== false,
+      approvedBy: req.authUser?.email || "Manager"
+    });
+    if (!log) return res.status(404).json({ error: "Attendance log not found." });
+    persistWfLocal(ctx);
+    await logAudit("OVERTIME_APPROVAL_UPDATED", { attendanceId: log.id, approved: log.overtimeApproved }, req);
+    return res.json({ success: true, log });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Leave Management
+app.get('/api/workforce/leaves', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listLeaves(ctx, { employeeId: req.query.employeeId })); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/leaves', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const leave = await workforceRepo.createLeaveRequest(ctx, req.body);
+    persistWfLocal(ctx);
+    return res.status(201).json({ success: true, leave });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/leaves/:id/decide', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const leave = await workforceRepo.decideLeaveRequest(ctx, {
+      id: req.params.id,
+      decision: req.body?.decision,
+      reviewedBy: req.authUser?.email || "Manager"
+    });
+    if (!leave) return res.status(404).json({ error: "Leave request not found." });
+    persistWfLocal(ctx);
+    await logAudit("LEAVE_DECIDED", { leaveId: leave.id, status: leave.status }, req);
+    return res.json({ success: true, leave });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+// Peru Payroll Periods, Calculation, Boletas & SUNAT-Compatible Exports
+app.get('/api/workforce/payroll/periods', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try { return res.json(await workforceRepo.listPayrollPeriods(ctx)); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.get('/api/workforce/payroll/entries', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    return res.json(await workforceRepo.listPayrollEntries(ctx, {
+      periodId: req.query.periodId,
+      employeeId: req.query.employeeId
+    }));
+  } catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.post('/api/workforce/payroll/calculate', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const result = await workforceRepo.runPayrollForPeriod(ctx, {
+      ...(req.body || {}),
+      createdBy: req.authUser?.email || "Manager"
+    });
+    persistWfLocal(ctx);
+    await logAudit("PAYROLL_PERIOD_CALCULATED", {
+      periodId: result.period.id,
+      periodCode: result.period.periodCode,
+      employeeCount: result.entries.length,
+      netPayTotal: result.period.totals?.netPay || 0
+    }, req);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error("[Payroll] Calculation failed:", error.message);
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/workforce/exports/plame', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const [periods, rules] = await Promise.all([
+      workforceRepo.listPayrollPeriods(ctx),
+      workforceRepo.listPeruLaborRules(ctx)
+    ]);
+    const period = req.query.periodId ? periods.find(p => p.id === req.query.periodId) : periods[0];
+    if (!period) return res.status(404).json({ error: "No payroll period found to export." });
+    const entries = await workforceRepo.listPayrollEntries(ctx, { periodId: period.id });
+    const rule = selectEffectivePeruRule(rules, period.startDate);
+    const content = workforceRepo.buildPlameExport(entries, period, rule);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="openpos_plame_${period.periodCode}.txt"`);
+    return res.send(content);
+  } catch (error) { return res.status(503).json({ error: error.message }); }
+});
+
+app.get('/api/workforce/exports/t-registro', requireApiKey, async (req, res) => {
+  await initPgTables();
+  const ctx = getWfContext();
+  if (!ctx) return res.status(503).json({ error: "Persistent workforce storage is unavailable." });
+  try {
+    const [employees, contracts, branches] = await Promise.all([
+      workforceRepo.listEmployees(ctx),
+      workforceRepo.listContracts(ctx),
+      workforceRepo.listBranches(ctx)
+    ]);
+    const content = workforceRepo.buildTRegistroExport(employees, contracts, branches);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="openpos_t_registro.txt"');
+    return res.send(content);
+  } catch (error) { return res.status(503).json({ error: error.message }); }
 });
 
 // -------------------------------------------------------------

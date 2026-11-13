@@ -146,3 +146,108 @@ body:has(.kds-topbar){background:var(--op-bg)!important;color:var(--op-ink)!impo
 .settings-grid-upgraded button:disabled{opacity:.65;cursor:wait}
 @media(max-width:760px){.settings-intro{align-items:flex-start;flex-direction:column;padding:18px}.settings-save-state{white-space:normal}.settings-grid-upgraded{grid-template-columns:1fr}.settings-connection-meta{grid-template-columns:1fr 1fr}}
 @media(max-width:440px){.settings-connection-meta{grid-template-columns:1fr}.settings-connection-card .code-box{grid-template-columns:1fr}.settings-connection-card .code-label{grid-column:auto}}
+
+/* Catalog Low Stock & Bulk Selection */
+.low-stock-filter-btn{gap:8px;white-space:nowrap}
+.low-stock-filter-btn.is-active{background:color-mix(in srgb,var(--op-danger) 14%,var(--op-panel))!important;border-color:var(--op-danger)!important;color:var(--op-danger)!important}
+.low-stock-count-pill{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:6px;background:color-mix(in srgb,var(--op-danger) 16%,var(--op-panel-2));color:var(--op-danger);font-size:11px;font-weight:800}
+.low-stock-filter-btn.is-active .low-stock-count-pill{background:var(--op-danger);color:#fff}
+.stock-cell-wrap{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.stock-qty-num{font-variant-numeric:tabular-nums;font-weight:700}
+.stock-qty-num.is-low{color:var(--op-danger)}
+.product-select-checkbox,#selectAllProductsCheckbox{width:16px;height:16px;accent-color:var(--op-brand);cursor:pointer}
+.data-table tr.is-selected{background:color-mix(in srgb,var(--op-brand) 8%,var(--op-panel))!important}
+.bulk-action-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;padding:12px 18px;background:color-mix(in srgb,var(--op-brand) 7%,var(--op-panel))!important;border-color:color-mix(in srgb,var(--op-brand) 38%,var(--op-line))!important}
+.bulk-action-summary{display:flex;align-items:center;gap:9px;color:var(--op-brand);font-size:13px;font-weight:700}
+.bulk-action-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.bulk-action-controls .form-select{min-height:36px;padding:6px 12px;font-size:13px}
+
+/* Extended Back Office Settings */
+.settings-form-row{display:flex;gap:12px;flex-wrap:wrap}
+.settings-toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;margin-bottom:12px;border:1px solid var(--op-line);border-radius:11px;background:var(--op-panel-2);cursor:pointer}
+.settings-toggle-row input[type="checkbox"]{margin-top:3px;width:17px;height:17px;accent-color:var(--op-brand);flex-shrink:0;cursor:pointer}
+.settings-toggle-row strong{display:block;font-size:13px;color:var(--op-ink);margin-bottom:2px}
+.settings-toggle-row span{display:block;font-size:11px;color:var(--op-muted);line-height:1.4}
+.settings-channel-grid{display:flex;flex-wrap:wrap;gap:10px}
+.settings-channel-chip{display:inline-flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid var(--op-line);border-radius:10px;background:var(--op-panel-2);font-size:12px;font-weight:700;color:var(--op-ink);cursor:pointer;margin-bottom:0!important}
+.settings-channel-chip input{width:15px;height:15px;accent-color:var(--op-brand);cursor:pointer}
+.settings-connection-card{grid-column:1/-1}
+@media(max-width:640px){.bulk-action-bar{align-items:stretch}.bulk-action-controls{width:100%}.bulk-action-controls>*{flex:1 1 auto}}
+
+/* Row Actions & Wide Modals */
+.action-btn-group{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.modal-dialog-wide{max-width:780px!important;width:min(94vw,780px)}
+
+/* 30-Day Ingredient History Modal */
+.history-subtitle{display:block;font-size:12px;color:var(--op-muted);margin-top:2px}
+.history-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.history-toolbar label{font-size:12px;font-weight:700;color:var(--op-muted);text-transform:uppercase;letter-spacing:.06em}
+.history-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.history-stat-box{padding:11px 13px;border:1px solid var(--op-line);border-radius:11px;background:var(--op-panel-2)}
+.history-stat-box span{display:block;font-size:10px;font-weight:700;color:var(--op-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.history-stat-box strong{font-size:15px;color:var(--op-ink);font-variant-numeric:tabular-nums}
+.history-notice{padding:10px 13px;margin-bottom:12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--op-brand) 30%,var(--op-line));background:color-mix(in srgb,var(--op-brand) 8%,var(--op-panel-2));color:var(--op-ink);font-size:12px}
+.history-chart-wrap{position:relative;height:250px;padding:12px;border:1px solid var(--op-line);border-radius:12px;background:var(--op-panel-2);margin-bottom:16px}
+.history-events-section h4{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--op-ink)}
+@media(max-width:640px){.history-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Printable Recipe Card */
+.recipe-card-sheet{background:#fff;color:#17243a;border:1px solid #cbd5e1;border-radius:14px;padding:24px 26px}
+.recipe-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-bottom:14px;border-bottom:2px solid #17243a;margin-bottom:16px}
+.recipe-card-brand{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#2457d6;margin-bottom:4px}
+.recipe-card-title{margin:0;font-size:24px;font-weight:800;color:#0f172a}
+.recipe-card-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.recipe-card-pill{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:6px;border:1px solid #cbd5e1;background:#f8fafc;font-size:11px;font-weight:700;color:#1e293b}
+.recipe-card-meta-right{text-align:right;font-size:11px;color:#475569;white-space:nowrap}
+.recipe-card-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:18px}
+.recipe-card-kpi{padding:10px 12px;border:1px solid #dbe3ef;border-radius:8px;background:#f8fafc}
+.recipe-card-kpi span{display:block;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:2px}
+.recipe-card-kpi strong{font-size:15px;color:#0f172a}
+.recipe-card-section{margin-bottom:16px}
+.recipe-card-section h4{margin:0 0 8px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#334155}
+.recipe-card-table{width:100%;border-collapse:collapse;font-size:13px}
+.recipe-card-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #cbd5e1;background:#f1f5f9;color:#334155;font-size:11px;text-transform:uppercase}
+.recipe-card-table td{padding:8px 10px;border-bottom:1px solid #e2e8f0;color:#0f172a}
+.recipe-card-instructions{padding:12px 14px;border:1px solid #dbe3ef;border-radius:8px;background:#f8fafc;font-size:13px;line-height:1.6;white-space:pre-line;color:#0f172a}
+.recipe-card-allergens{margin-top:10px;padding:9px 12px;border-radius:8px;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;font-size:12px;font-weight:600}
+@media(max-width:640px){.recipe-card-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.recipe-card-top{flex-direction:column}.recipe-card-meta-right{text-align:left}}
+@media print{
+  body{background:#fff!important;color:#000!important}
+  .app-container,.toast-container,.no-print,.modal:not(.active){display:none!important}
+  #recipePrintModal.active,#boletaPrintModal.active{position:static!important;display:block!important;inset:auto!important;padding:0!important;background:#fff!important}
+  #recipePrintModal.active .modal-dialog,#boletaPrintModal.active .modal-dialog{max-width:100%!important;width:100%!important;margin:0!important;border:0!important;box-shadow:none!important;background:#fff!important}
+  #recipePrintModal.active .modal-body,#boletaPrintModal.active .modal-body{padding:0!important}
+  .recipe-card-sheet,.boleta-sheet{border:0!important;border-radius:0!important;padding:0!important;box-shadow:none!important}
+}
+
+/* Workforce & Peru Payroll Module */
+.wf-header-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.wf-lang-switch{display:inline-flex;border:1px solid var(--op-line);border-radius:10px;overflow:hidden;background:var(--op-panel)}
+.wf-lang-btn{padding:7px 12px;border:0;background:transparent;color:var(--op-muted);font-size:12px;font-weight:700;cursor:pointer}
+.wf-lang-btn.active{background:var(--op-brand);color:#fff}
+.wf-subnav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;padding:8px;border:1px solid var(--op-line);border-radius:14px;background:var(--op-panel)}
+.wf-subtab-btn{padding:8px 14px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--op-muted);font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.wf-subtab-btn:hover{background:var(--op-panel-2);color:var(--op-ink)}
+.wf-subtab-btn.active{background:var(--op-brand);color:#fff}
+.wf-subpane{display:none}
+.wf-subpane.active{display:block}
+.wf-grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:18px}
+.wf-grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.wf-alert-banner{padding:12px 15px;border-radius:12px;border:1px solid color-mix(in srgb,var(--op-warn) 45%,var(--op-line));background:color-mix(in srgb,var(--op-warn) 10%,var(--op-panel));color:var(--op-ink);font-size:13px;margin-bottom:14px}
+.wf-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.wf-badge-good{background:color-mix(in srgb,var(--op-good) 14%,var(--op-panel));color:var(--op-good)}
+.wf-badge-warn{background:color-mix(in srgb,var(--op-warn) 16%,var(--op-panel));color:var(--op-warn)}
+.wf-badge-danger{background:color-mix(in srgb,var(--op-danger) 16%,var(--op-panel));color:var(--op-danger)}
+.wf-badge-info{background:color-mix(in srgb,var(--op-brand) 14%,var(--op-panel));color:var(--op-brand)}
+.wf-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px}
+.wf-card-pad{padding:18px}
+.boleta-sheet{background:#fff;color:#0f172a;border:1px solid #cbd5e1;border-radius:12px;padding:24px;font-size:13px}
+.boleta-header{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:14px}
+.boleta-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px;background:#f8fafc;border:1px solid #dbe3ef;border-radius:8px;margin-bottom:14px}
+.boleta-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}
+.boleta-table{width:100%;border-collapse:collapse;font-size:12px}
+.boleta-table th{background:#f1f5f9;text-align:left;padding:7px 9px;border-bottom:1px solid #cbd5e1;color:#334155}
+.boleta-table td{padding:6px 9px;border-bottom:1px solid #e2e8f0}
+.boleta-totals{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;font-weight:800;font-size:15px;margin-bottom:12px}
+.boleta-legal-notice{padding:10px 12px;background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;color:#92400e;font-size:11px;font-weight:700}
+@media(max-width:860px){.wf-grid-2,.wf-grid-3,.boleta-cols,.boleta-meta-grid{grid-template-columns:1fr}}

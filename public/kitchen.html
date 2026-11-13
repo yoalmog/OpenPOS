@@ -302,9 +302,10 @@ body { background:var(--kds-bg)!important;color:var(--kds-text)!important; }
 .kds-board { gap:14px!important;padding:16px!important; }
 button:focus-visible { outline:3px solid rgba(59,130,246,.5);outline-offset:2px; }
 </style>
-  <link rel="stylesheet" href="/enterprise-v2.css?v=enterprise-v2">\n</head>
+  <link rel="stylesheet" href="/enterprise-v2.css?v=enterprise-v2">
+</head>
 <body>
-
+  <div id="kdsAppShell" style="display:none; min-height:100vh; flex-direction:column;">
   <!-- Top Bar -->
   <header class="kds-topbar">
     <div class="kds-brand">
@@ -336,6 +337,9 @@ button:focus-visible { outline:3px solid rgba(59,130,246,.5);outline-offset:2px;
       <a href="/order" target="_blank" class="station-btn" style="text-decoration: none;">
         <i class="fa-solid fa-mobile-screen"></i> Online Order
       </a>
+      <button id="kdsLogoutBtn" class="station-btn" type="button" style="display:none;">
+        <i class="fa-solid fa-right-from-bracket"></i> Sign Out
+      </button>
     </div>
   </header>
 
@@ -346,7 +350,46 @@ button:focus-visible { outline:3px solid rgba(59,130,246,.5);outline-offset:2px;
       <p style="font-size: 1.1rem;">All caught up! No tickets currently waiting in kitchen.</p>
     </div>
   </main>
+  </div>
 
-  <script src="/kitchen.js"></script>
+  <!-- Supabase Authentication for Kitchen Display -->
+  <section id="openposKdsLogin" style="min-height:100vh;display:none;align-items:center;justify-content:center;padding:24px;background:#0b1220;color:#e5e7eb;font-family:'Plus Jakarta Sans',sans-serif;">
+    <form id="openposKdsLoginForm" style="width:min(100%,420px);padding:36px;border:1px solid #273449;border-radius:20px;background:#111b2d;text-align:center;box-shadow:0 24px 70px rgba(0,0,0,0.45);">
+      <div style="font-size:32px;color:#10b981;margin-bottom:12px;"><i class="fa-solid fa-kitchen-set"></i></div>
+      <h1 style="margin:0 0 8px;font-size:26px;">OpenPOS Kitchen Display</h1>
+      <p style="color:#9ca3af;margin:0 0 24px;">Sign in to access live kitchen tickets</p>
+      <input id="openposKdsEmail" type="email" autocomplete="username" required placeholder="Email" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:12px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <input id="openposKdsPassword" type="password" autocomplete="current-password" required placeholder="Password" style="box-sizing:border-box;width:100%;padding:13px 14px;margin-bottom:14px;border:1px solid #3b4960;border-radius:10px;background:#0b1220;color:#fff;font-size:15px;">
+      <button id="kdsEmailSignInBtn" type="submit" style="width:100%;padding:13px 18px;border:0;border-radius:10px;background:#10b981;color:white;font-size:15px;font-weight:700;cursor:pointer;">Sign in to KDS</button>
+      <button id="kdsGoogleSignInBtn" type="button" style="width:100%;margin-top:10px;padding:13px 18px;border:1px solid #3b4960;border-radius:10px;background:#f9fafb;color:#111827;font-size:15px;font-weight:700;cursor:pointer;">
+        <i class="fa-brands fa-google"></i> Continue with Google
+      </button>
+      <p id="kdsLoginError" role="alert" style="color:#fca5a5;font-size:13px;margin:16px 0 0;"></p>
+    </form>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth-client.js"></script>
+  <script>
+    window.OpenPosAuth.init({
+      loginSectionId: 'openposKdsLogin',
+      appContainerSelector: '#kdsAppShell',
+      formId: 'openposKdsLoginForm',
+      emailInputId: 'openposKdsEmail',
+      passwordInputId: 'openposKdsPassword',
+      submitBtnId: 'kdsEmailSignInBtn',
+      googleBtnId: 'kdsGoogleSignInBtn',
+      errorElId: 'kdsLoginError',
+      logoutBtnId: 'kdsLogoutBtn',
+      scriptSrc: '/kitchen.js',
+      onAuthenticated: function () {
+        var shell = document.getElementById('kdsAppShell');
+        if (shell) shell.style.display = 'flex';
+        if (typeof window.__openposKdsRefresh === 'function') {
+          window.__openposKdsRefresh();
+        }
+      }
+    });
+  </script>
 </body>
 </html>

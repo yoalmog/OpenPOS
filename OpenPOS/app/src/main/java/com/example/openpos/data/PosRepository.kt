@@ -24,7 +24,7 @@ class PosRepository private constructor(context: Context? = null) {
             storeName = prefs?.getString("store_name", "OpenPOS Store") ?: "OpenPOS Store",
             taxRatePercent = (prefs?.getFloat("tax_rate", 17.0f) ?: 17.0f).toDouble(),
             currencySymbol = prefs?.getString("currency_symbol", "$") ?: "$",
-            syncServerUrl = prefs?.getString("sync_server_url", "https://openpos.b4u2store.workers.dev") ?: "https://openpos.b4u2store.workers.dev",
+            syncServerUrl = (prefs?.getString("sync_server_url", null) ?: "").trim().takeIf { it.isNotEmpty() && !it.contains("10.0.2.2") && !it.contains("localhost", ignoreCase = true) && !it.contains("127.0.0.1") } ?: "https://openpos.b4u2store.workers.dev",
             cashierName = prefs?.getString("cashier_name", "Cashier") ?: "Cashier",
             receiptFooter = prefs?.getString("receipt_footer", "Thank you for your visit!") ?: "Thank you for your visit!",
             defaultPrinterMac = prefs?.getString("printer_mac", null),
@@ -92,6 +92,8 @@ class PosRepository private constructor(context: Context? = null) {
             ).also { db.saveShift(it) }
         }
 
+        // Migrate legacy emulator/localhost URLs saved by earlier APK builds.
+        prefs?.edit()?.putString("sync_server_url", _settings.value.syncServerUrl)?.apply()
         syncManager?.serverUrl = _settings.value.syncServerUrl
 
         // Setup two-way sync catalog receiver

@@ -21,7 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
     chartInstance: null,
     kdsFilterStation: 'ALL',
     posCart: [],
-    posCategory: 'ALL'
+    posCategory: 'ALL',
+    posPendingReceiptId: null
   };
 
   // DOM Elements
@@ -275,6 +276,8 @@ document.addEventListener('DOMContentLoaded', () => {
       state.categories = await res.json();
       renderCategoriesTable();
       populateCategorySelects();
+      const posFilters = document.getElementById('posCategoryFilters');
+      if (posFilters) delete posFilters.dataset.ready;
       renderPosRegister();
     } catch (err) {
       console.error('Error fetching categories:', err);
@@ -1216,7 +1219,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const taxRate = Number(state.storeInfo.taxRate || 0) / 100;
     const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
     const grandTotal = Math.round((subtotal + taxAmount) * 100) / 100;
-    const receiptId = 'WEBPOS-' + Date.now();
+    const receiptId = state.posPendingReceiptId || ('WEBPOS-' + Date.now());
+    state.posPendingReceiptId = receiptId;
     const tableNote = document.getElementById('posTableInput').value.trim();
     const method = document.getElementById('posPaymentMethod').value;
     const payload = {
@@ -1241,6 +1245,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const result = await response.json();
       if (!response.ok || !result.acknowledgedIds?.length) throw new Error(result.error || 'Sale was not confirmed by the server.');
       state.posCart = [];
+      state.posPendingReceiptId = null;
       document.getElementById('posTableInput').value = '';
       await Promise.all([fetchItems(), fetchReceipts(), fetchStats()]);
       showToast('Sale completed · Receipt ' + receiptId, 'success');

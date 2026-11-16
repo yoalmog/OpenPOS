@@ -2,11 +2,12 @@ name: OpenPOS CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/production-online-order-kds]
   push:
     branches:
       - main
       - fix/production-online-order-kds
+      - feat/unified-pos-register-design
 
 permissions:
   contents: read

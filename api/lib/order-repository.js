@@ -44,7 +44,10 @@ function ticketFromRow(row) {
 }
 
 async function createOnlineOrderWithTickets(pool, order, tickets) {
-  const client = await pool.connect();
+  // node-postgres Pool exposes connect(); the Cloudflare request-scoped
+  // Hyperdrive adapter exposes query() on its already-connected Client.
+  const client = typeof pool.connect === "function" ? await pool.connect() : pool;
+  const shouldReleaseClient = client !== pool && typeof client.release === "function";
   try {
     await client.query("BEGIN");
     await client.query(
@@ -81,7 +84,7 @@ async function createOnlineOrderWithTickets(pool, order, tickets) {
     try { await client.query("ROLLBACK"); } catch (_) {}
     throw error;
   } finally {
-    client.release();
+    if (shouldReleaseClient) client.release();
   }
 }
 

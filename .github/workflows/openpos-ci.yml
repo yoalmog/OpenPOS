@@ -1,0 +1,38 @@
+name: OpenPOS CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - fix/production-online-order-kds
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openpos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend syntax and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Syntax/build check
+        run: npm run build
+      - name: Lint check
+        run: npm run lint
+      - name: Unit and repository tests
+        run: npm test

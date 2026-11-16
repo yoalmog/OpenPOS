@@ -23,7 +23,7 @@ function buildKitchenTicketsForOrder(order, { recipes = [], items = [], now = Da
   }
 
   return [...stationGroups.entries()].map(([station, ticketItems]) => {
-    const maxPrep = Math.max(...ticketItems.map((item) => item.prepTimeMinutes), 5);
+    const maxPrep = Math.max(...ticketItems.map((item) => item.prepTimeMinutes));
     return {
       id: `ticket_${now}_${Math.random().toString(36).slice(2, 6)}`,
       receiptId: order.id,

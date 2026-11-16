@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="/style.css?v=enterprise-v2">
   <link rel="stylesheet" href="/enterprise-v2.css?v=enterprise-v2">
+  <link rel="stylesheet" href="/pos-register.css?v=1">
 </head>
 <body class="dark-theme">
   <div class="app-container" style="display:none;">
@@ -35,6 +36,7 @@
 
       <nav class="sidebar-nav">
         <div class="sidebar-section-title">CORE OPERATIONS</div>
+        <a href="#pos" class="nav-item" data-tab="pos"><i class="fa-solid fa-cash-register"></i><span>POS Register</span></a>
         <a href="#dashboard" class="nav-item active" data-tab="dashboard">
           <i class="fa-solid fa-chart-pie"></i>
           <span>Dashboard</span>
@@ -538,6 +540,32 @@
                 <div class="empty-state-sm">Loading checklists...</div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- POS REGISTER -->
+        <section id="tab-pos" class="tab-pane">
+          <div class="pos-register-heading">
+            <div><span class="pos-eyebrow">OPENPOS REGISTER</span><h2>Point of Sale</h2><p>Build an order, review the basket and complete payment</p></div>
+            <div class="pos-register-meta"><i class="fa-solid fa-cloud"></i><span>Live catalog</span><span id="posCatalogCount">0 items</span></div>
+          </div>
+          <div class="pos-register-layout">
+            <div class="pos-catalog-panel">
+              <div class="pos-catalog-toolbar">
+                <label class="pos-search"><i class="fa-solid fa-magnifying-glass"></i><input id="posSearchInput" type="search" placeholder="Search menu items..."></label>
+                <div id="posCategoryFilters" class="pos-category-filters"><button class="pos-category-chip active" data-category="ALL">All items</button></div>
+              </div>
+              <div id="posProductsGrid" class="pos-products-grid"><div class="pos-empty">Loading live catalog…</div></div>
+            </div>
+            <aside class="pos-cart-panel">
+              <div class="pos-cart-header"><div><span class="pos-eyebrow">CURRENT ORDER</span><h3>Order summary</h3></div><button id="posClearCartBtn" class="pos-text-button" type="button">Clear</button></div>
+              <label class="pos-table-field">Table / order note<input id="posTableInput" type="text" placeholder="e.g. Table 4"></label>
+              <div id="posCartItems" class="pos-cart-items"><div class="pos-empty">Your order is empty. Add an item to begin.</div></div>
+              <div class="pos-totals"><div><span>Subtotal</span><strong id="posSubtotal">$0.00</strong></div><div><span>Tax</span><strong id="posTax">$0.00</strong></div><div class="pos-grand-total"><span>Total due</span><strong id="posGrandTotal">$0.00</strong></div></div>
+              <label class="pos-payment-field">Payment method<select id="posPaymentMethod"><option value="CASH">Cash</option><option value="CARD">Card</option><option value="OTHER">Other</option></select></label>
+              <button id="posCompleteSaleBtn" class="pos-checkout-button" type="button" disabled><i class="fa-solid fa-lock"></i> Complete sale <span id="posCheckoutAmount">$0.00</span></button>
+              <p class="pos-checkout-note">A sale is recorded only after the server confirms the transaction.</p>
+            </aside>
           </div>
         </section>
 

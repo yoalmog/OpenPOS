@@ -19,7 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
     activeTab: 'dashboard',
     selectedProductColor: '#2E7D32',
     chartInstance: null,
-    kdsFilterStation: 'ALL'
+    kdsFilterStation: 'ALL',
+    posCart: [],
+    posCategory: 'ALL'
   };
 
   // DOM Elements
@@ -49,6 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSyncUrl();
   setupModals();
   fetchInitialData();
+  setupPosRegister();
 
   // Polling for live updates
   setInterval(() => {
@@ -103,6 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const titles = {
         dashboard: 'Dashboard Overview',
+        pos: 'POS Register',
         kitchen: 'Live Kitchen Display (KDS)',
         'online-orders': 'Omnichannel Inbound Orders',
         products: 'Menu & Catalog Items',
@@ -119,6 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Load specific tab data on demand
       if (tabId === 'dashboard') renderSalesChart();
+      else if (tabId === 'pos') renderPosRegister();
       else if (tabId === 'kitchen') fetchKdsTickets();
       else if (tabId === 'online-orders') fetchOnlineOrders();
       else if (tabId === 'recipes') fetchRecipeProfitability();
@@ -187,6 +192,1066 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Restaurant data refreshed', 'success');
   });
 
+
+  // -------------------------------------------------------------
+  // POS REGISTER — authenticated, real catalog + atomic sale sync
+  // -------------------------------------------------------------
+  function setupPosRegister() {
+    const search = document.getElementById('posSearchInput');
+    const filters = document.getElementById('posCategoryFilters');
+    const grid = document.getElementById('posProductsGrid');
+    const cart = document.getElementById('posCartItems');
+    const clear = document.getElementById('posClearCartBtn');
+    const checkout = document.getElementById('posCompleteSaleBtn');
+    search?.addEventListener('input', renderPosRegister);
+    filters?.addEventListener('click', event => {
+      const chip = event.target.closest('[data-category]');
+      if (!chip) return;
+      state.posCategory = chip.dataset.category;
+      filters.querySelectorAll('.pos-category-chip').forEach(node => node.classList.toggle('active', node === chip));
+      renderPosRegister();
+    });
+    grid?.addEventListener('click', event => {
+      const button = event.target.closest('[data-pos-add]');
+      if (!button) return;
+      const item = state.items.find(row => String(row.id) === button.dataset.posAdd);
+      if (!item) return;
+      const existing = state.posCart.find(row => String(row.item.id) === String(item.id));
+      if (existing) existing.quantity += 1;
+      else state.posCart.push({ item, quantity: 1 });
+      renderPosRegister();
+    });
+    cart?.addEventListener('click', event => {
+      const button = event.target.closest('[data-pos-qty]');
+      if (!button) return;
+      const index = Number(button.dataset.index);
+      const line = state.posCart[index];
+      if (!line) return;
+      line.quantity += button.dataset.posQty === 'inc' ? 1 : -1;
+      if (line.quantity <= 0) state.posCart.splice(index, 1);
+      renderPosRegister();
+    });
+    clear?.addEventListener('click', () => { state.posCart = []; renderPosRegister(); });
+    checkout?.addEventListener('click', completePosSale);
+  }
+
+  function posMoney(value) {
+    return (state.storeInfo.currency || '
+  // -------------------------------------------------------------
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      state.storeInfo = {
+        name: data.storeName || 'Artisan Cafe & Bistro',
+        currency: data.currency || '$',
+        taxRate: data.taxRate || 17.0
+      };
+      if (storeNameLabel) storeNameLabel.textContent = state.storeInfo.name;
+      populateSettingsForm();
+    } catch (err) {
+      console.error('Error fetching status:', err);
+    }
+  }
+
+  async function fetchStats(period) {
+    try {
+      const selectedPeriod = period || (document.getElementById('statsPeriodSelect')?.value) || 'today';
+      const res = await fetch(`/api/stats?period=${encodeURIComponent(selectedPeriod)}`);
+      const data = await res.json();
+      state.stats = data;
+      renderKPIs(data);
+      renderTopSelling(data.topSelling || []);
+      renderSalesChart(data.hourlySales || {});
+    } catch (err) {
+      console.error('Error fetching stats:', err);
+    }
+  }
+
+  async function fetchCategories() {
+    try {
+      const res = await fetch('/api/categories');
+      state.categories = await res.json();
+      renderCategoriesTable();
+      populateCategorySelects();
+      renderPosRegister();
+    } catch (err) {
+      console.error('Error fetching categories:', err);
+    }
+  }
+
+  async function fetchItems() {
+    try {
+      const res = await fetch('/api/items');
+      state.items = await res.json();
+      renderProductsTable();
+      renderPosRegister();
+    } catch (err) {
+      console.error('Error fetching items:', err);
+    }
+  }
+
+  async function fetchReceipts() {
+    try {
+      const res = await fetch('/api/receipts');
+      state.receipts = await res.json();
+      renderReceiptsTable();
+    } catch (err) {
+      console.error('Error fetching receipts:', err);
+    }
+  }
+
+  // 1. KDS Kitchen Tickets
+  async function fetchKdsTickets() {
+    try {
+      const res = await fetch('/api/kitchen/tickets');
+      state.kitchenTickets = await res.json();
+      renderKdsTickets();
+    } catch (err) {
+      console.error('Error fetching KDS tickets:', err);
+    }
+  }
+
+  function renderKdsTickets() {
+    const container = document.getElementById('kdsTicketsList');
+    if (!container) return;
+
+    let filtered = state.kitchenTickets.filter(t => t.status !== 'SERVED');
+    if (state.kdsFilterStation !== 'ALL') {
+      filtered = filtered.filter(t => t.station === state.kdsFilterStation);
+    }
+
+    if (filtered.length === 0) {
+      container.innerHTML = `
+        <div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 3rem;">
+          <i class="fa-solid fa-kitchen-set fa-2x" style="opacity:0.3; margin-bottom:10px;"></i>
+          <p>No active kitchen tickets for ${escapeHtml(state.kdsFilterStation.replace('_', ' '))}.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const now = Date.now();
+    container.innerHTML = filtered.map(t => {
+      const elapsedMins = Math.floor((now - t.createdAt) / 60000);
+      const targetMins = Math.round((t.targetReadyAt - t.createdAt) / 60000) || 5;
+      const isUrgent = elapsedMins >= targetMins;
+
+      return `
+        <div class="kds-mini-ticket ${isUrgent ? 'urgency-danger' : ''}">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:1.15rem; color:#fff;">#${escapeHtml(t.orderNumber)}</strong>
+            <span class="badge ${isUrgent ? 'badge-danger' : 'badge-info'}">
+              <i class="fa-regular fa-clock"></i> ${elapsedMins}m / ${targetMins}m
+            </span>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:10px;">
+            <span>${escapeHtml(t.tableNumber || t.channel)}</span> • 
+            <span style="color:#60a5fa; font-weight:700;">${escapeHtml(t.station.replace('_', ' '))}</span>
+          </div>
+          <div style="margin-bottom:12px;">
+            ${(t.items || []).map(i => `
+              <div style="display:flex; justify-content:space-between; font-size:0.875rem; margin-bottom:4px;">
+                <span><strong>${i.quantity}x</strong> ${escapeHtml(i.name)}</span>
+              </div>
+              ${i.notes ? `<div style="font-size:0.75rem; color:#f59e0b; margin-bottom:4px;">• ${escapeHtml(i.notes)}</div>` : ''}
+            `).join('')}
+          </div>
+          <div style="display:flex; gap:6px; margin-top:auto;">
+            ${t.status === 'PENDING' ? `
+              <button class="btn btn-outline btn-sm flex-1" onclick="window.updateKdsStatus('${t.id}', 'PREPARING')">
+                <i class="fa-solid fa-fire"></i> Start Prep
+              </button>
+            ` : ''}
+            ${t.status === 'PREPARING' ? `
+              <button class="btn btn-primary btn-sm flex-1" onclick="window.updateKdsStatus('${t.id}', 'READY')">
+                <i class="fa-solid fa-check"></i> Mark Ready
+              </button>
+            ` : ''}
+            ${t.status === 'READY' ? `
+              <button class="btn btn-outline btn-sm flex-1" onclick="window.updateKdsStatus('${t.id}', 'SERVED')">
+                <i class="fa-solid fa-bell-concierge"></i> Bump
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  window.updateKdsStatus = async function(id, status) {
+    try {
+      await fetch(`/api/kitchen/tickets/${id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      fetchKdsTickets();
+    } catch (_) {}
+  };
+
+  // Station filter buttons in KDS tab
+  document.getElementById('kdsStationFilterPills')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.kds-pill-btn');
+    if (!btn) return;
+    document.querySelectorAll('.kds-pill-btn').forEach(b => b.classList.remove('active', 'btn-primary'));
+    document.querySelectorAll('.kds-pill-btn').forEach(b => b.classList.add('btn-outline'));
+    btn.classList.remove('btn-outline');
+    btn.classList.add('active', 'btn-primary');
+    state.kdsFilterStation = btn.dataset.station;
+    renderKdsTickets();
+  });
+
+  // 2. Online Orders
+  async function fetchOnlineOrders() {
+    try {
+      const res = await fetch('/api/online-orders');
+      state.onlineOrders = await res.json();
+      renderOnlineOrders();
+    } catch (err) {
+      console.error('Error fetching online orders:', err);
+    }
+  }
+
+  function renderOnlineOrders() {
+    const tbody = document.getElementById('onlineOrdersTableBody');
+    if (!tbody) return;
+    if (state.onlineOrders.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No inbound online orders yet.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = state.onlineOrders.map(o => `
+      <tr>
+        <td><strong>#${escapeHtml(o.orderNumber)}</strong></td>
+        <td><span class="badge badge-info">${escapeHtml(o.channel)}</span></td>
+        <td>
+          <div style="font-weight:600;">${escapeHtml(o.customerName)}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(o.customerPhone || '')}</div>
+        </td>
+        <td>${escapeHtml(o.deliveryType)} ${o.tableNumber ? `(${escapeHtml(o.tableNumber)})` : ''}</td>
+        <td>${(o.items || []).map(i => `${escapeHtml(i.name)} (x${i.quantity})`).join(', ')}</td>
+        <td><strong>$${Number(o.total).toFixed(2)}</strong></td>
+        <td>
+          <span class="badge ${o.status === 'READY' ? 'badge-success' : (o.status === 'PREPARING' ? 'badge-warning' : 'badge-info')}">
+            ${escapeHtml(o.status)}
+          </span>
+        </td>
+        <td class="text-right">
+          ${o.status === 'RECEIVED' ? `
+            <button class="btn btn-outline btn-sm" onclick="window.updateOnlineStatus('${o.id}', 'PREPARING')">Accept & Prep</button>
+          ` : ''}
+          ${o.status === 'PREPARING' ? `
+            <button class="btn btn-primary btn-sm" onclick="window.updateOnlineStatus('${o.id}', 'READY')">Ready for Pickup</button>
+          ` : ''}
+          ${o.status === 'READY' ? `
+            <button class="btn btn-outline btn-sm" onclick="window.updateOnlineStatus('${o.id}', 'COMPLETED')">Complete</button>
+          ` : ''}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  window.updateOnlineStatus = async function(id, status) {
+    try {
+      await fetch(`/api/online-orders/${id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      fetchOnlineOrders();
+    } catch (_) {}
+  };
+
+  // 3. Recipes & Food Cost Profitability
+  async function fetchRecipeProfitability() {
+    try {
+      const res = await fetch('/api/recipes/profitability');
+      const data = await res.json();
+      state.recipeProfitability = data.items || [];
+      renderRecipeProfitability();
+    } catch (err) {
+      console.error('Error fetching recipe profitability:', err);
+    }
+  }
+
+  function renderRecipeProfitability() {
+    const tbody = document.getElementById('recipeProfitabilityTableBody');
+    if (!tbody) return;
+    if (state.recipeProfitability.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No recipes found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = state.recipeProfitability.map((m, idx) => {
+      let statusBadge = '<span class="badge badge-success">Healthy (&lt;30%)</span>';
+      if (m.foodCostPct > 35) statusBadge = '<span class="badge badge-danger">High Cost (&gt;35%)</span>';
+      else if (m.foodCostPct > 30) statusBadge = '<span class="badge badge-warning">Moderate (30-35%)</span>';
+
+      return `
+        <tr>
+          <td><strong>${escapeHtml(m.itemName)}</strong></td>
+          <td><span class="badge badge-info">${escapeHtml(m.station?.replace('_', ' ') || 'KITCHEN')}</span></td>
+          <td><strong>$${Number(m.price).toFixed(2)}</strong></td>
+          <td style="color:#f59e0b;">$${Number(m.foodCost).toFixed(2)}</td>
+          <td style="color:#10b981;"><strong>$${Number(m.grossMargin).toFixed(2)}</strong></td>
+          <td>
+            <div style="font-weight:700;">${m.foodCostPct}%</div>
+            <div class="profit-meter">
+              <div class="profit-meter-fill" style="width:${Math.min(100, m.foodCostPct * 2)}%; background:${m.foodCostPct > 35 ? '#ef4444' : '#10b981'};"></div>
+            </div>
+          </td>
+          <td>${statusBadge}</td>
+          <td class="text-right">
+            <button class="btn btn-outline btn-sm" onclick="window.openRecipeModal(${idx})">
+              <i class="fa-solid fa-list"></i> View BOM
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  window.openRecipeModal = function(index) {
+    const m = state.recipeProfitability[index];
+    if (!m) return;
+    document.getElementById('recipeModalTitle').textContent = `Recipe BOM: ${m.itemName}`;
+    document.getElementById('recipeModalMeta').textContent = 
+      `Selling Price: $${m.price.toFixed(2)} | Raw Food Cost: $${m.foodCost.toFixed(2)} | Gross Margin: $${m.grossMargin.toFixed(2)} (${m.profitMarginPct}%)`;
+
+    const tbody = document.getElementById('recipeIngredientsList');
+    if (m.ingredients && m.ingredients.length > 0) {
+      tbody.innerHTML = m.ingredients.map(ing => `
+        <tr>
+          <td><strong>${escapeHtml(ing.name)}</strong></td>
+          <td>${ing.quantity} ${escapeHtml(ing.unit)}</td>
+          <td>$${Number(ing.unitCost).toFixed(4)}</td>
+          <td><strong>$${Number(ing.lineCost).toFixed(2)}</strong></td>
+        </tr>
+      `).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No specific raw ingredients assigned yet.</td></tr>';
+    }
+
+    const recipe = state.recipes.find(r => r.itemId === m.itemId);
+    document.getElementById('recipeInstructionsBox').innerHTML = `
+      <div style="font-weight:600; margin-bottom:4px; font-size:0.8rem; color:var(--text-muted);">Preparation Instructions:</div>
+      <div style="font-size:0.875rem;">${escapeHtml(recipe?.instructions || 'Standard barista & kitchen preparation procedure.')}</div>
+      ${recipe?.allergens ? `<div style="font-size:0.75rem; color:#f59e0b; margin-top:6px;"><strong>Allergens:</strong> ${escapeHtml(recipe.allergens)}</div>` : ''}
+    `;
+
+    openModal(recipeModal);
+  };
+
+  // 4. Raw Ingredients
+  async function fetchIngredients() {
+    try {
+      const res = await fetch('/api/ingredients');
+      state.ingredients = await res.json();
+      renderIngredients();
+    } catch (err) {
+      console.error('Error fetching ingredients:', err);
+    }
+  }
+
+  function renderIngredients() {
+    const tbody = document.getElementById('ingredientsTableBody');
+    if (!tbody) return;
+    if (state.ingredients.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No ingredients registered.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = state.ingredients.map(ing => {
+      const isLow = Number(ing.currentStock) <= Number(ing.minThreshold);
+      return `
+        <tr>
+          <td><strong>${escapeHtml(ing.name)}</strong></td>
+          <td>${escapeHtml(ing.unit)}</td>
+          <td>$${Number(ing.unitCost).toFixed(4)}</td>
+          <td><strong>${ing.currentStock} ${escapeHtml(ing.unit)}</strong></td>
+          <td>${ing.minThreshold} ${escapeHtml(ing.unit)}</td>
+          <td>
+            <span class="badge ${isLow ? 'badge-danger' : 'badge-success'}">
+              ${isLow ? 'Low Stock' : 'In Stock'}
+            </span>
+          </td>
+          <td class="text-right">
+            <button class="btn btn-outline btn-sm" onclick="window.promptAdjustStock('${ing.id}', '${escapeHtml(ing.name)}')">
+              <i class="fa-solid fa-plus-minus"></i> Adjust
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  window.promptAdjustStock = async function(id, name) {
+    const change = prompt(`Receive or adjust stock for ${name} (e.g. +1000 or -500):`);
+    if (!change || isNaN(Number(change))) return;
+    try {
+      await fetch(`/api/ingredients/${id}/stock`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ change: Number(change), reason: "Manual Back Office Adjustment" })
+      });
+      showToast('Ingredient stock updated!', 'success');
+      fetchIngredients();
+      fetchRecipeProfitability();
+    } catch (_) {}
+  };
+
+  // 5. Food Waste
+  async function fetchWaste() {
+    try {
+      const res = await fetch('/api/waste');
+      state.wasteData = await res.json();
+      renderWaste();
+    } catch (err) {
+      console.error('Error fetching waste log:', err);
+    }
+  }
+
+  function renderWaste() {
+    const tbody = document.getElementById('wasteTableBody');
+    const kpiVal = document.getElementById('kpiWasteTotal');
+    if (kpiVal) kpiVal.textContent = `$${Number(state.wasteData.totalWasteCost || 0).toFixed(2)}`;
+    if (!tbody) return;
+
+    const logs = state.wasteData.logs || [];
+    if (logs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No food waste logged.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = logs.map(w => `
+      <tr>
+        <td>${new Date(w.timestamp).toLocaleString()}</td>
+        <td><strong>${escapeHtml(w.name)}</strong></td>
+        <td>${w.quantity} ${escapeHtml(w.unit || '')}</td>
+        <td style="color:#ef4444; font-weight:700;">$${Number(w.cost).toFixed(2)}</td>
+        <td><span class="badge badge-warning">${escapeHtml(w.reason)}</span></td>
+        <td>${escapeHtml(w.loggedBy || 'Staff')}</td>
+      </tr>
+    `).join('');
+  }
+
+  // 6. Forecast & Staffing
+  async function fetchForecast() {
+    try {
+      const res = await fetch('/api/forecast');
+      state.forecast = await res.json();
+      renderForecast();
+    } catch (err) {
+      console.error('Error fetching forecast:', err);
+    }
+  }
+
+  function renderForecast() {
+    const tbody = document.getElementById('forecastTableBody');
+    const totalOrdersLabel = document.getElementById('forecastTotalOrders');
+    if (totalOrdersLabel && state.forecast.totalPredictedOrders) {
+      totalOrdersLabel.textContent = state.forecast.totalPredictedOrders;
+    }
+    if (!tbody) return;
+
+    const list = state.forecast.hourlyForecast || [];
+    tbody.innerHTML = list.map(f => `
+      <tr>
+        <td><strong>${escapeHtml(f.hour)}</strong></td>
+        <td>${f.predictedOrders} orders</td>
+        <td><strong style="color:#60a5fa; font-size:1.05rem;">${f.recommendedStaff.total} Staff</strong></td>
+        <td>☕ ${f.recommendedStaff.baristas} Baristas</td>
+        <td>🍳 ${f.recommendedStaff.kitchenCooks} Cooks</td>
+        <td>🍽️ ${f.recommendedStaff.floorStaff} Floor</td>
+      </tr>
+    `).join('');
+  }
+
+  // 7. Safety & Checklists
+  async function fetchSafety() {
+    try {
+      const [tempRes, checkRes] = await Promise.all([
+        fetch('/api/safety/temperature').then(r => r.json()),
+        fetch('/api/safety/checklists').then(r => r.json())
+      ]);
+      state.tempLogs = tempRes;
+      state.checklists = checkRes;
+      renderSafety();
+    } catch (err) {
+      console.error('Error fetching safety data:', err);
+    }
+  }
+
+  function renderSafety() {
+    const tbody = document.getElementById('tempLogsTableBody');
+    if (tbody) {
+      if (state.tempLogs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No temperature checks logged.</td></tr>';
+      } else {
+        tbody.innerHTML = state.tempLogs.map(t => `
+          <tr>
+            <td><strong>${escapeHtml(t.unitName)}</strong></td>
+            <td>${t.targetTempC}°C</td>
+            <td><strong>${t.actualTempC}°C</strong></td>
+            <td><span class="badge ${t.status === 'NORMAL' ? 'badge-success' : 'badge-danger'}">${t.status}</span></td>
+            <td>${escapeHtml(t.checkedBy)}</td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    const checkContainer = document.getElementById('checklistsContainer');
+    if (checkContainer) {
+      checkContainer.innerHTML = state.checklists.map(list => `
+        <div style="margin-bottom:1.5rem;">
+          <h4 style="margin:0 0 0.5rem; font-size:0.95rem; color:#fff;">
+            <i class="fa-solid fa-clipboard-check" style="color:#10b981;"></i> ${escapeHtml(list.title)}
+          </h4>
+          <div>
+            ${list.items.map(task => `
+              <div class="checklist-item-row ${task.done ? 'completed' : ''}" onclick="window.toggleChecklist('${list.id}', '${task.id}', ${!task.done})">
+                <input type="checkbox" ${task.done ? 'checked' : ''} style="cursor:pointer; width:16px; height:16px;">
+                <span style="flex:1; font-size:0.875rem;">${escapeHtml(task.text)}</span>
+                ${task.time ? `<span style="font-size:0.75rem; color:#10b981;"><i class="fa-regular fa-clock"></i> ${task.time}</span>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  window.toggleChecklist = async function(listId, itemId, done) {
+    try {
+      await fetch(`/api/safety/checklists/${listId}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId, done })
+      });
+      fetchSafety();
+    } catch (_) {}
+  };
+
+  // -------------------------------------------------------------
+  // CATALOG, MODALS & RECEPTIONS
+  // -------------------------------------------------------------
+
+  function renderProductsTable() {
+    const tbody = document.getElementById('productsTableBody');
+    if (!tbody) return;
+    if (state.items.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No products in catalog.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = state.items.map(item => {
+      const cat = state.categories.find(c => c.id === item.categoryId);
+      return `
+        <tr>
+          <td><span style="display:inline-block; width:18px; height:18px; border-radius:50%; background:${item.color || '#2E7D32'};"></span></td>
+          <td><strong>${escapeHtml(item.name)}</strong></td>
+          <td>${escapeHtml(cat?.name || 'General')}</td>
+          <td><span class="badge badge-info">${escapeHtml(item.station?.replace('_', ' ') || 'HOT KITCHEN')}</span></td>
+          <td>${item.prepTimeMinutes || 5} min</td>
+          <td>${Array.isArray(item.priceVariants) && item.priceVariants.length
+            ? item.priceVariants.map(v => `${escapeHtml(v.name)}: ${escapeHtml(state.storeInfo.currency || 'S/')} ${Number(v.price).toFixed(2)}`).join('<br>')
+            : `${escapeHtml(state.storeInfo.currency || 'S/')} ${Number(item.price).toFixed(2)}`}</td>
+          <td>${item.stockQuantity}</td>
+          <td class="text-right">
+            <button class="btn btn-outline btn-sm" onclick="window.editProduct('${item.id}')" title="Edit product" aria-label="Edit product">
+              <i class="fa-solid fa-pen"></i> Edit
+            </button>
+            <button class="btn btn-icon btn-sm text-danger" onclick="window.deleteProduct('${item.id}')" title="Delete">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  window.editProduct = function(id) {
+    const item = state.items.find(product => String(product.id) === String(id));
+    if (!item) {
+      showToast('Product not found. Refresh the catalog and try again.', 'error');
+      return;
+    }
+    document.getElementById('productModalTitle').textContent = 'Edit Product';
+    document.getElementById('modalProductId').value = item.id;
+    document.getElementById('modalProductName').value = item.name || '';
+    document.getElementById('modalProductPrice').value = Number(item.price || 0).toFixed(2);
+    document.getElementById('modalProductStock').value = Number(item.stockQuantity ?? 0);
+    document.getElementById('modalProductCategory').value = item.categoryId || 'general';
+    document.getElementById('modalProductStation').value = item.station || 'HOT_KITCHEN';
+    document.getElementById('modalProductPrepTime').value = Number(item.prepTimeMinutes || 5);
+    document.getElementById('modalProductBarcode').value = item.barcode || '';
+    document.getElementById('modalProductVariants').value = (item.priceVariants || [])
+      .map(variant => `${variant.name} | ${Number(variant.price).toFixed(2)}`).join('\n');
+    state.selectedProductColor = item.color || '#2E7D32';
+    openModal(productModal);
+  };
+
+  window.deleteProduct = async function(id) {
+    if (!confirm('Are you sure you want to remove this product?')) return;
+    try {
+      await fetch(`/api/items/${id}`, { method: 'DELETE' });
+      showToast('Product removed', 'success');
+      fetchItems();
+      fetchRecipeProfitability();
+    } catch (_) {}
+  };
+
+  function renderCategoriesTable() {
+    const tbody = document.getElementById('categoriesTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = state.categories.map(c => `
+      <tr>
+        <td><span style="display:inline-block; width:18px; height:18px; border-radius:50%; background:#1976D2;"></span></td>
+        <td><strong>${escapeHtml(c.name)}</strong></td>
+        <td><code>${escapeHtml(c.id)}</code></td>
+      </tr>
+    `).join('');
+  }
+
+  function populateCategorySelects() {
+    const prodCatSelect = document.getElementById('modalProductCategory');
+    const filterSelect = document.getElementById('categoryFilterSelect');
+    if (prodCatSelect) {
+      prodCatSelect.innerHTML = state.categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    }
+    if (filterSelect) {
+      filterSelect.innerHTML = '<option value="">All Categories</option>' + state.categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    }
+  }
+
+  function renderReceiptsTable() {
+    const tbody = document.getElementById('receiptsTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = state.receipts.map(r => `
+      <tr>
+        <td><strong>${escapeHtml(r.id)}</strong></td>
+        <td>${new Date(r.timestamp).toLocaleString()}</td>
+        <td>${escapeHtml(r.employeeName || 'Staff')}</td>
+        <td>${r.items?.length || 0} items</td>
+        <td>${r.isRefund ? '<span class="badge badge-danger">Refund</span>' : '<span class="badge badge-success">Sale</span>'}</td>
+        <td><strong>$${Number(r.grandTotal || r.total || 0).toFixed(2)}</strong></td>
+        <td><a href="/api/export/receipts" target="_blank" class="btn btn-outline btn-sm">CSV</a></td>
+      </tr>
+    `).join('');
+  }
+
+  function renderKPIs(stats) {
+    const kpiRevenue = document.getElementById('kpiRevenue');
+    const kpiOrders = document.getElementById('kpiOrders');
+    const kpiAvgTicket = document.getElementById('kpiAvgTicket');
+    const kpiCash = document.getElementById('kpiCash');
+    const kpiCard = document.getElementById('kpiCard');
+    const curr = state.storeInfo.currency || '$';
+
+    if (kpiRevenue) kpiRevenue.textContent = `${curr}${Number(stats.totalRevenue || 0).toFixed(2)}`;
+    if (kpiOrders) kpiOrders.textContent = stats.totalOrders || 0;
+    if (kpiAvgTicket) kpiAvgTicket.textContent = `Avg ticket: ${curr}${Number(stats.averageTicket || 0).toFixed(2)}`;
+    if (kpiCash) kpiCash.textContent = `${curr}${Number(stats.cashSales || 0).toFixed(2)}`;
+    if (kpiCard) kpiCard.textContent = `${curr}${Number(stats.cardSales || 0).toFixed(2)}`;
+  }
+
+  function renderTopSelling(topList) {
+    const container = document.getElementById('topProductsList');
+    if (!container) return;
+    if (!topList || topList.length === 0) {
+      container.innerHTML = '<div class="empty-state-sm">No sales recorded yet.</div>';
+      return;
+    }
+    container.innerHTML = topList.map((item, idx) => `
+      <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05);">
+        <span><strong>#${idx + 1}</strong> ${escapeHtml(item.name)}</span>
+        <span style="color:#10b981; font-weight:700;">${item.qty} sold</span>
+      </div>
+    `).join('');
+  }
+
+  function renderSalesChart(hourlySales) {
+    const canvas = document.getElementById('salesChart');
+    if (!canvas) return;
+    const data = hourlySales || (state.stats && state.stats.hourlySales) || {};
+    const labels = Object.keys(data);
+    const values = Object.values(data);
+
+    if (state.chartInstance) state.chartInstance.destroy();
+
+    state.chartInstance = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels.length ? labels : ['08:00', '12:00', '16:00', '20:00'],
+        datasets: [{
+          label: 'Hourly Sales ($)',
+          data: values.length ? values : [0, 0, 0, 0],
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: { grid: { color: 'rgba(255,255,255,0.05)' } }
+        }
+      }
+    });
+  }
+
+  // -------------------------------------------------------------
+  // MODALS & FORMS HANDLING
+  // -------------------------------------------------------------
+  function setupModals() {
+    // Open modal buttons
+    document.getElementById('openAddProductModalBtn')?.addEventListener('click', () => {
+      document.getElementById('productForm')?.reset();
+      document.getElementById('productModalTitle').textContent = 'Add New Product';
+      document.getElementById('modalProductId').value = '';
+      document.getElementById('modalProductStock').value = '100';
+      document.getElementById('modalProductPrepTime').value = '5';
+      document.getElementById('modalProductVariants').value = '';
+      state.selectedProductColor = '#2E7D32';
+      openModal(productModal);
+    });
+    document.getElementById('openAddCategoryModalBtn')?.addEventListener('click', () => openModal(categoryModal));
+    document.getElementById('openAddIngredientModalBtn')?.addEventListener('click', () => openModal(ingredientModal));
+    document.getElementById('openReportWasteModalBtn')?.addEventListener('click', () => openModal(wasteModal));
+    document.getElementById('openAddTempModalBtn')?.addEventListener('click', () => openModal(tempModal));
+
+    // Close buttons
+    document.querySelectorAll('[data-close]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const modalId = btn.dataset.close;
+        const modal = document.getElementById(modalId);
+        if (modal) closeModal(modal);
+      });
+    });
+
+    // Product Form Submit
+    document.getElementById('productForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const variantLines = document.getElementById('modalProductVariants').value
+        .split('\n').map(line => line.trim()).filter(Boolean);
+      const priceVariants = [];
+      for (const line of variantLines) {
+        const parts = line.split('|');
+        const name = (parts[0] || '').trim();
+        const price = Number((parts[1] || '').trim());
+        if (!name || parts.length < 2 || !Number.isFinite(price) || price < 0) {
+          showToast(`Invalid size price: "${line}". Use "Size | Price", one per line.`, 'error');
+          return;
+        }
+        priceVariants.push({ name, price });
+      }
+      const productId = document.getElementById('modalProductId').value.trim();
+      const payload = {
+        ...(productId ? { id: productId } : {}),
+        name: document.getElementById('modalProductName').value,
+        price: parseFloat(document.getElementById('modalProductPrice').value),
+        priceVariants,
+        stockQuantity: parseInt(document.getElementById('modalProductStock').value, 10),
+        categoryId: document.getElementById('modalProductCategory').value,
+        station: document.getElementById('modalProductStation').value,
+        prepTimeMinutes: parseInt(document.getElementById('modalProductPrepTime').value, 10),
+        barcode: document.getElementById('modalProductBarcode').value,
+        color: state.selectedProductColor
+      };
+      try {
+        const res = await fetch('/api/items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Could not save product');
+        closeModal(productModal);
+        showToast(productId ? 'Product updated successfully' : 'Product created successfully', 'success');
+        fetchItems();
+        fetchRecipeProfitability();
+      } catch (error) {
+        showToast(error.message || 'Could not save product', 'error');
+      }
+    });
+
+    // Category Form Submit
+    document.getElementById('categoryForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('modalCatName').value;
+      try {
+        const res = await fetch('/api/categories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, color: -16744448 })
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal(categoryModal);
+          showToast('Category created', 'success');
+          fetchCategories();
+        }
+      } catch (_) {}
+    });
+
+    // Ingredient Form Submit
+    document.getElementById('ingredientForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        name: document.getElementById('modalIngName').value,
+        unit: document.getElementById('modalIngUnit').value,
+        unitCost: parseFloat(document.getElementById('modalIngCost').value),
+        currentStock: parseFloat(document.getElementById('modalIngStock').value),
+        minThreshold: parseFloat(document.getElementById('modalIngThreshold').value)
+      };
+      try {
+        const res = await fetch('/api/ingredients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal(ingredientModal);
+          showToast('Ingredient added to inventory', 'success');
+          fetchIngredients();
+        }
+      } catch (_) {}
+    });
+
+    // Waste Form Submit
+    document.getElementById('wasteForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        name: document.getElementById('modalWasteItem').value,
+        quantity: parseFloat(document.getElementById('modalWasteQty').value),
+        cost: parseFloat(document.getElementById('modalWasteCost').value),
+        reason: document.getElementById('modalWasteReason').value,
+        loggedBy: 'Manager'
+      };
+      try {
+        const res = await fetch('/api/waste', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal(wasteModal);
+          showToast('Waste recorded and stock adjusted', 'success');
+          fetchWaste();
+          fetchIngredients();
+        }
+      } catch (_) {}
+    });
+
+    // Temp Form Submit
+    document.getElementById('tempForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        unitName: document.getElementById('modalTempUnit').value,
+        actualTempC: parseFloat(document.getElementById('modalTempReading').value),
+        checkedBy: 'Manager'
+      };
+      try {
+        const res = await fetch('/api/safety/temperature', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          closeModal(tempModal);
+          showToast('Temperature reading saved', 'success');
+          fetchSafety();
+        }
+      } catch (_) {}
+    });
+  }
+
+  function openModal(modal) {
+    if (!modal) return;
+    modal.classList.add('active');
+  }
+
+  function closeModal(modal) {
+    if (!modal) return;
+    modal.classList.remove('active');
+  }
+
+  // Settings Form
+  function populateSettingsForm() {
+    const nameInput = document.getElementById('settingStoreName');
+    const currInput = document.getElementById('settingCurrency');
+    const taxInput = document.getElementById('settingTaxRate');
+    const addrInput = document.getElementById('settingAddress');
+
+    if (nameInput) nameInput.value = state.storeInfo.name;
+    if (currInput) currInput.value = state.storeInfo.currency;
+    if (taxInput) taxInput.value = state.storeInfo.taxRate;
+    if (addrInput) addrInput.value = state.storeInfo.address || '';
+  }
+
+  document.getElementById('storeSettingsForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      name: document.getElementById('settingStoreName').value,
+      currency: document.getElementById('settingCurrency').value,
+      taxRate: document.getElementById('settingTaxRate').value,
+      address: document.getElementById('settingAddress').value
+    };
+
+    try {
+      const res = await fetch('/api/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        state.storeInfo = data.storeInfo;
+        if (storeNameLabel) storeNameLabel.textContent = data.storeInfo.name;
+        showToast('Store settings saved!', 'success');
+      }
+    } catch (_) {}
+  });
+
+  // Danger Reset
+  document.getElementById('resetAllDataBtn')?.addEventListener('click', async () => {
+    const pin = document.getElementById('dangerManagerPin')?.value.trim();
+    if (!pin) {
+      alert('Please enter Manager PIN to authorize reset.');
+      return;
+    }
+    if (confirm('ARE YOU SURE? This will reset all store data to restaurant default templates.')) {
+      try {
+        const res = await fetch('/api/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-manager-pin': pin },
+          body: JSON.stringify({ managerPin: pin })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Data reset to restaurant default template', 'success');
+          fetchInitialData();
+        } else {
+          showToast(data.error || 'Reset failed', 'error');
+        }
+      } catch (_) {}
+    }
+  });
+
+  // Analytics Period Selector
+  document.getElementById('statsPeriodSelect')?.addEventListener('change', (e) => {
+    fetchStats(e.target.value);
+  });
+
+  function showToast(message, type = 'success') {
+    if (!toastContainer) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    const icon = type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation';
+    toast.innerHTML = `<i class="fa-solid ${icon}"></i> <span>${escapeHtml(message)}</span>`;
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 300);
+    }, 3500);
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+});
+) + Number(value || 0).toFixed(2);
+  }
+
+  function renderPosRegister() {
+    const grid = document.getElementById('posProductsGrid');
+    const filters = document.getElementById('posCategoryFilters');
+    if (!grid || !filters) return;
+    const query = (document.getElementById('posSearchInput')?.value || '').trim().toLowerCase();
+    if (filters.dataset.ready !== 'true') {
+      filters.innerHTML = '<button class="pos-category-chip active" data-category="ALL">All items</button>' +
+        state.categories.map(category => '<button class="pos-category-chip" data-category="' + escapeHtml(String(category.id)) + '">' + escapeHtml(category.name) + '</button>').join('');
+      filters.dataset.ready = 'true';
+    }
+    const filtered = state.items.filter(item =>
+      (state.posCategory === 'ALL' || String(item.categoryId) === String(state.posCategory)) &&
+      (!query || String(item.name || '').toLowerCase().includes(query))
+    );
+    document.getElementById('posCatalogCount').textContent = state.items.length + ' items';
+    grid.innerHTML = filtered.length ? filtered.map(item => {
+      const station = String(item.station || 'HOT_KITCHEN').replace(/_/g, ' ');
+      const icon = station.includes('COFFEE') ? 'fa-mug-hot' : station.includes('SALAD') ? 'fa-leaf' : station.includes('DESSERT') ? 'fa-cake-candles' : station.includes('BAR') ? 'fa-glass-water' : 'fa-utensils';
+      const unavailable = Number(item.stockQuantity) <= 0;
+      return '<article class="pos-product-card"><div class="pos-product-art"><i class="fa-solid ' + icon + '"></i></div><div class="pos-product-info"><span class="pos-product-station">' + escapeHtml(station) + '</span><h4>' + escapeHtml(item.name) + '</h4><div class="pos-product-bottom"><strong>' + posMoney(item.price) + '</strong><button type="button" data-pos-add="' + escapeHtml(String(item.id)) + '" ' + (unavailable ? 'disabled' : '') + ' aria-label="Add ' + escapeHtml(item.name) + '"><i class="fa-solid fa-plus"></i></button></div></div></article>';
+    }).join('') : '<div class="pos-empty">No matching items in the live catalog.</div>';
+    const cartNode = document.getElementById('posCartItems');
+    const subtotal = state.posCart.reduce((sum, line) => sum + Number(line.item.price) * line.quantity, 0);
+    const taxRate = Number(state.storeInfo.taxRate || 0) / 100;
+    const tax = subtotal * taxRate;
+    const total = subtotal + tax;
+    cartNode.innerHTML = state.posCart.length ? state.posCart.map((line, index) =>
+      '<div class="pos-cart-line"><div class="pos-cart-line-info"><strong>' + escapeHtml(line.item.name) + '</strong><small>' + posMoney(line.item.price) + ' each</small></div><div class="pos-quantity"><button type="button" data-pos-qty="dec" data-index="' + index + '" aria-label="Decrease">−</button><b>' + line.quantity + '</b><button type="button" data-pos-qty="inc" data-index="' + index + '" aria-label="Increase">+</button></div><strong class="pos-line-total">' + posMoney(Number(line.item.price) * line.quantity) + '</strong></div>'
+    ).join('') : '<div class="pos-empty">Your order is empty. Add an item to begin.</div>';
+    document.getElementById('posSubtotal').textContent = posMoney(subtotal);
+    document.getElementById('posTax').textContent = posMoney(tax);
+    document.getElementById('posGrandTotal').textContent = posMoney(total);
+    document.getElementById('posCheckoutAmount').textContent = posMoney(total);
+    document.getElementById('posCompleteSaleBtn').disabled = !state.posCart.length;
+  }
+
+  async function completePosSale() {
+    if (!state.posCart.length) return;
+    const button = document.getElementById('posCompleteSaleBtn');
+    const subtotal = state.posCart.reduce((sum, line) => sum + Number(line.item.price) * line.quantity, 0);
+    const taxRate = Number(state.storeInfo.taxRate || 0) / 100;
+    const taxAmount = Math.round(subtotal * taxRate * 100) / 100;
+    const grandTotal = Math.round((subtotal + taxAmount) * 100) / 100;
+    const receiptId = 'WEBPOS-' + Date.now();
+    const tableNote = document.getElementById('posTableInput').value.trim();
+    const method = document.getElementById('posPaymentMethod').value;
+    const payload = {
+      id: receiptId, timestamp: Date.now(), subtotal, taxRate, taxAmount, grandTotal,
+      employeeName: 'Back Office Cashier', customerName: null,
+      ticketNote: tableNote ? 'Table ' + tableNote : '',
+      isRefund: false, originalReceiptId: null,
+      payments: [{ type: method, displayName: method, amount: grandTotal }],
+      items: state.posCart.map(line => ({
+        itemId: line.item.id, name: line.item.name, quantity: line.quantity,
+        unitPrice: Number(line.item.price), totalPrice: Number(line.item.price) * line.quantity,
+        discountPercent: 0, modifiers: []
+      }))
+    };
+    button.disabled = true;
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing…';
+    try {
+      const response = await fetch('/api/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client: 'BackOffice-POS', timestamp: Date.now(), events: [{ id: Date.now(), type: 'RECEIPT_CREATED', payload }] })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.acknowledgedIds?.length) throw new Error(result.error || 'Sale was not confirmed by the server.');
+      state.posCart = [];
+      document.getElementById('posTableInput').value = '';
+      await Promise.all([fetchItems(), fetchReceipts(), fetchStats()]);
+      showToast('Sale completed · Receipt ' + receiptId, 'success');
+    } catch (error) {
+      showToast(error.message || 'Sale failed. No success was recorded.', 'error');
+    } finally {
+      button.innerHTML = '<i class="fa-solid fa-lock"></i> Complete sale <span id="posCheckoutAmount">' + posMoney(grandTotal) + '</span>';
+      renderPosRegister();
+    }
+  }
+
   // -------------------------------------------------------------
   // API FETCH & RENDER METHODS
   // -------------------------------------------------------------
@@ -227,6 +1292,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.categories = await res.json();
       renderCategoriesTable();
       populateCategorySelects();
+      renderPosRegister();
     } catch (err) {
       console.error('Error fetching categories:', err);
     }
@@ -237,6 +1303,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/items');
       state.items = await res.json();
       renderProductsTable();
+      renderPosRegister();
     } catch (err) {
       console.error('Error fetching items:', err);
     }

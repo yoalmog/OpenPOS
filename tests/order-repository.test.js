@@ -92,3 +92,19 @@ test("persists order and ticket status changes", async () => {
   assert.deepEqual(await updateOnlineOrderStatus(pool, "o1", "PREPARING"), { id: "o1", status: "PREPARING" });
   assert.deepEqual(await updateKitchenTicketStatus(pool, "t1", "READY", 999), { id: "t1", status: "READY" });
 });
+
+test("writes online orders with a query-only request-scoped database client", async () => {
+  const calls = [];
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      return { rows: [], rowCount: 1 };
+    }
+  };
+  await createOnlineOrderWithTickets(client, order, tickets);
+  const sql = calls.map((call) => call.sql);
+  assert.equal(sql[0], "BEGIN");
+  assert.ok(sql.some((query) => query.includes("INSERT INTO online_orders")));
+  assert.ok(sql.some((query) => query.includes("INSERT INTO kitchen_orders")));
+  assert.equal(sql.at(-1), "COMMIT");
+});

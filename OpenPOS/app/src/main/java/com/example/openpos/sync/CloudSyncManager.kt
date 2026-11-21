@@ -173,6 +173,8 @@ class CloudSyncManager(
                                         price = iObj.getDouble("price"),
                                         categoryId = iObj.optString("categoryId", "general"),
                                         barcode = if (iObj.has("barcode") && !iObj.isNull("barcode")) iObj.getString("barcode") else null,
+                                        imageUrl = (iObj.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
+                                            ?: iObj.optString("image_url").takeIf { it.isNotBlank() && it != "null" }),
                                         color = iObj.optLong("color", 0xFF2E7D32),
                                         stockQuantity = iObj.optInt("stockQuantity", 100),
                                         station = iObj.optString("station", "HOT_KITCHEN"),

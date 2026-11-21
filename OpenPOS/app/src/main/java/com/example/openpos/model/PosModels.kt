@@ -27,6 +27,7 @@ data class Item(
     val price: Double,
     val categoryId: String,
     val barcode: String? = null,
+    val imageUrl: String? = null,
     val color: Long = 0xFF2196F3,
     val modifiers: List<ModifierOption> = emptyList(),
     val stockQuantity: Int = 100,

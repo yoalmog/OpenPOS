@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { listShifts, getOpenShift, startShift, closeShift } = require("../api/lib/shift-repository");
+const { listShifts, getOpenShift, startShift, closeShift } = require("../lib/shift-repository");
 
 function poolWith(rows = []) {
   return { calls: [], async query(sql, params) { this.calls.push({ sql, params }); return { rows }; } };

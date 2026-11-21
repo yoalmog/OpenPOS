@@ -7,7 +7,7 @@ const {
   calculateNightMinutesLima,
   calculateFifthCategoryMonthlyIR,
   calculateEmployeePayroll
-} = require("../api/lib/peru-payroll-engine");
+} = require("../lib/peru-payroll-engine");
 
 test("selectEffectivePeruRule picks latest rule valid for target date", () => {
   const rules = [

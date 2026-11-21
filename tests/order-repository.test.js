@@ -7,7 +7,7 @@ const {
   listKitchenTickets,
   updateOnlineOrderStatus,
   updateKitchenTicketStatus
-} = require("../api/lib/order-repository");
+} = require("../lib/order-repository");
 
 function fakePool({ failOn } = {}) {
   const calls = [];

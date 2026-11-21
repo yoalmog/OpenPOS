@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const workforceRepo = require("../api/lib/workforce-repository");
+const workforceRepo = require("../lib/workforce-repository");
 
 test("Employee PINs are PBKDF2-hashed, never leaked in API payloads, and clock-in/out computes night & overtime", async () => {
   const store = {};

@@ -7,7 +7,7 @@ const {
   listOperationalRecords,
   upsertOperationalRecord,
   deleteOperationalRecord
-} = require("../api/lib/operational-repository");
+} = require("../lib/operational-repository");
 
 function mockPool(handler) {
   const calls = [];

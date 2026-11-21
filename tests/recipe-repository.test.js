@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require("../api/lib/recipe-repository");
+const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require("../lib/recipe-repository");
 
 function fakePool(rows = []) {
   const calls = [];

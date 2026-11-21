@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { listReceipts, getHourlyReceiptCounts } = require("../api/lib/analytics-repository");
+const { listReceipts, getHourlyReceiptCounts } = require("../lib/analytics-repository");
 
 function mockPool(rows) {
   return { calls: [], async query(sql, params) {

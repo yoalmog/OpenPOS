@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { validateSyncEvent, SUPPORTED_SYNC_EVENT_TYPES } = require("../api/lib/sync-validation");
+const { validateSyncEvent, SUPPORTED_SYNC_EVENT_TYPES } = require("../lib/sync-validation");
 
 test("only receipt creation and refund events are currently supported", () => {
   assert.deepEqual([...SUPPORTED_SYNC_EVENT_TYPES].sort(), ["RECEIPT_CREATED", "RECEIPT_REFUNDED"]);

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildIngredientStockHistory } = require("../api/lib/ingredient-history");
+const { buildIngredientStockHistory } = require("../lib/ingredient-history");
 
 test("buildIngredientStockHistory reconstructs 30-day stock curve from audit, waste, and sales", () => {
   const now = Date.UTC(2026, 10, 13, 15, 0, 0);

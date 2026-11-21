@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createPosSaleAtomically, InsufficientStockError } = require("../api/lib/pos-sale-repository");
+const { createPosSaleAtomically, InsufficientStockError } = require("../lib/pos-sale-repository");
 
 function fakePool({ duplicate = false, stock = 100 } = {}) {
   const calls = [];

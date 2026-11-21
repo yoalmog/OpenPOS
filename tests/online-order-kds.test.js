@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildKitchenTicketsForOrder } = require("../api/lib/online-order-kds");
+const { buildKitchenTicketsForOrder } = require("../lib/online-order-kds");
 
 test("routes online order items to recipe stations and groups by station", () => {
   const tickets = buildKitchenTicketsForOrder({

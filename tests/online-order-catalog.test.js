@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildOnlineOrderItems } = require("../api/lib/online-order-catalog");
+const { buildOnlineOrderItems } = require("../lib/online-order-catalog");
 
 test("uses PostgreSQL catalog price and name, ignoring client-supplied price", async () => {
   const calls = [];

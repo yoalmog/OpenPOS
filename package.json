@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build": "node --check server.js && node --check api/index.js && node --check api/lib/catalog-repository.js && node --check api/lib/ingredient-history.js && node --check api/lib/pin-crypto.js && node --check api/lib/peru-payroll-engine.js && node --check api/lib/workforce-repository.js",
-    "lint": "node --check server.js && node --check api/index.js && node --check api/lib/catalog-repository.js && node --check api/lib/ingredient-history.js && node --check api/lib/pin-crypto.js && node --check api/lib/peru-payroll-engine.js && node --check api/lib/workforce-repository.js && node --check public/auth-client.js && node --check public/workforce-peru.js && node --check public/app.js && node --check public/order.js && node --check public/kitchen.js",
+    "build": "node --check server.js && node --check api/index.js && node --check lib/catalog-repository.js && node --check lib/ingredient-history.js && node --check lib/pin-crypto.js && node --check lib/peru-payroll-engine.js && node --check lib/workforce-repository.js",
+    "lint": "node --check server.js && node --check api/index.js && node --check lib/catalog-repository.js && node --check lib/ingredient-history.js && node --check lib/pin-crypto.js && node --check lib/peru-payroll-engine.js && node --check lib/workforce-repository.js && node --check public/auth-client.js && node --check public/workforce-peru.js && node --check public/app.js && node --check public/order.js && node --check public/kitchen.js",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

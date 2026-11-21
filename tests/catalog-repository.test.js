@@ -5,7 +5,7 @@ const {
   bulkUpdateItemsPg,
   mergeStoreSettings,
   sanitizePublicStoreInfo
-} = require("../api/lib/catalog-repository");
+} = require("../lib/catalog-repository");
 
 test("validateBulkUpdatePayload requires non-empty ids and categoryId or station", () => {
   assert.equal(validateBulkUpdatePayload({}).valid, false);

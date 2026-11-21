@@ -1,6 +1,8 @@
 package com.example.openpos.ui.pos
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.bluetooth.BluetoothDevice
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -274,6 +276,21 @@ fun PosScreen(
                     // Shift Report Action
                     IconButton(onClick = { showShiftDialog = true }) {
                         Icon(Icons.Default.Assessment, contentDescription = strings.shiftReport)
+                    }
+
+                    // Back Office shortcut — opens the cloud management dashboard in the browser.
+                    TextButton(
+                        onClick = {
+                            val backOfficeIntent = Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://openpos-liart.vercel.app/")
+                            )
+                            context.startActivity(backOfficeIntent)
+                        }
+                    ) {
+                        Icon(Icons.Default.Dashboard, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Back Office", maxLines = 1)
                     }
 
                     // Settings Action
@@ -982,7 +999,7 @@ fun ItemCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(142.dp)
+            .height(184.dp)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape)
             .combinedClickable(
                 onClick = onClick,
@@ -1000,6 +1017,23 @@ fun ItemCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFF3CC)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    when (item.station) {
+                        "COFFEE_BAR" -> Icons.Default.LocalCafe
+                        "SALADS" -> Icons.Default.Eco
+                        "DESSERTS" -> Icons.Default.Cake
+                        "BAR" -> Icons.Default.LocalBar
+                        else -> Icons.Default.Restaurant
+                    },
+                    contentDescription = null,
+                    tint = Color(0xFF9A7413),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

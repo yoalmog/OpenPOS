@@ -63,9 +63,49 @@ jobs:
           fi
           printf '%s' "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
           jq -e '.project_info.project_id and any(.client[]; .client_info.android_client_info.package_name == "com.openpos.app")' app/google-services.json >/dev/null
+      - name: Configure stable Android debug signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
+        working-directory: OpenPOS
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ] || [ -z "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Missing ANDROID_DEBUG_KEYSTORE_BASE64 or ANDROID_DEBUG_KEYSTORE_PASSWORD GitHub Actions secret."
+            exit 1
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/openpos-debug.keystore"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ANDROID_DEBUG_KEYSTORE_PASSWORD" -alias openpos-debug >/dev/null
+          ACTUAL_SHA1="$(keytool -list -v -keystore "$KEYSTORE_PATH" -storepass "$ANDROID_DEBUG_KEYSTORE_PASSWORD" -alias openpos-debug | awk -F 'SHA1: ' '/SHA1:/{print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED_SHA1="E616F0ACFEEFB74FFCE76F839A3C13C00D5425B2"
+          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::The configured Android keystore SHA-1 does not match the Firebase-registered certificate."
+            echo "Expected: $EXPECTED_SHA1"
+            echo "Actual:   $ACTUAL_SHA1"
+            exit 1
+          fi
+          echo "OPENPOS_DEBUG_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "OPENPOS_DEBUG_KEYSTORE_PASSWORD=$ANDROID_DEBUG_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "OPENPOS_DEBUG_KEY_ALIAS=openpos-debug" >> "$GITHUB_ENV"
       - name: Build debug APK
         working-directory: OpenPOS
         run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug
+      - name: Verify APK signing certificate
+        working-directory: OpenPOS
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          ACTUAL_SHA1="$("$APKSIGNER" verify --print-certs "$APK" | awk -F ': ' '/Signer #1 certificate SHA-1 digest:/{print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED_SHA1="E616F0ACFEEFB74FFCE76F839A3C13C00D5425B2"
+          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::APK was not signed with the expected Firebase certificate."
+            echo "Expected: $EXPECTED_SHA1"
+            echo "Actual:   $ACTUAL_SHA1"
+            exit 1
+          fi
+          echo "Verified APK SHA-1: $ACTUAL_SHA1"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

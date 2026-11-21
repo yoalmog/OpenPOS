@@ -62,7 +62,7 @@ jobs:
             exit 1
           fi
           printf '%s' "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
-          jq -e '.project_info.project_id and .client[] | select(.client_info.android_client_info.package_name == "com.openpos.app")' app/google-services.json >/dev/null
+          jq -e '.project_info.project_id and any(.client[]; .client_info.android_client_info.package_name == "com.openpos.app")' app/google-services.json >/dev/null
       - name: Build debug APK
         working-directory: OpenPOS
         run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug

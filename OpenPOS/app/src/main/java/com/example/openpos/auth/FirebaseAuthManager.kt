@@ -22,7 +22,6 @@ class FirebaseAuthManager {
         val credentialManager = CredentialManager.create(activity)
         val serverClientId = activity.getString(R.string.default_web_client_id)
 
-        // First try the returning-user / account-picker flow.
         val googleOption = GetGoogleIdOption.Builder()
             .setServerClientId(serverClientId)
             .setFilterByAuthorizedAccounts(false)
@@ -31,14 +30,13 @@ class FirebaseAuthManager {
             .addCredentialOption(googleOption)
             .build()
 
-        // Some devices have no saved Credential Manager entry even though a
-        // Google account is present on the phone. In that case show Google's
-        // explicit Sign in with Google bottom sheet as a fallback.
+        // If Credential Manager has no saved account entry, invoke the
+        // explicit Google sign-in UI. In googleid 1.1.1 the server client ID
+        // is supplied to the constructor, not a setter.
         val result = try {
             credentialManager.getCredential(context = activity, request = googleRequest)
         } catch (_: NoCredentialException) {
-            val signInOption = GetSignInWithGoogleOption.Builder()
-                .setServerClientId(serverClientId)
+            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId)
                 .build()
             val signInRequest = GetCredentialRequest.Builder()
                 .addCredentialOption(signInOption)

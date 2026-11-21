@@ -4,8 +4,10 @@ import android.app.Activity
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.NoCredentialException
 import com.example.openpos.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.auth.FirebaseAuth
@@ -18,14 +20,30 @@ class FirebaseAuthManager {
 
     suspend fun signInWithGoogle(activity: Activity): String {
         val credentialManager = CredentialManager.create(activity)
+        val serverClientId = activity.getString(R.string.default_web_client_id)
+
         val googleOption = GetGoogleIdOption.Builder()
-            .setServerClientId(activity.getString(R.string.default_web_client_id))
+            .setServerClientId(serverClientId)
             .setFilterByAuthorizedAccounts(false)
             .build()
-        val request = GetCredentialRequest.Builder()
+        val googleRequest = GetCredentialRequest.Builder()
             .addCredentialOption(googleOption)
             .build()
-        val result = credentialManager.getCredential(context = activity, request = request)
+
+        // If Credential Manager has no saved account entry, invoke the
+        // explicit Google sign-in UI. In googleid 1.1.1 the server client ID
+        // is supplied to the constructor, not a setter.
+        val result = try {
+            credentialManager.getCredential(context = activity, request = googleRequest)
+        } catch (_: NoCredentialException) {
+            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId)
+                .build()
+            val signInRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(signInOption)
+                .build()
+            credentialManager.getCredential(context = activity, request = signInRequest)
+        }
+
         val credential = result.credential as? CustomCredential
             ?: throw IllegalStateException("Google did not return a supported sign-in credential.")
         if (credential.type != TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {

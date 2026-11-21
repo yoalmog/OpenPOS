@@ -6,6 +6,7 @@ const { createOnlineOrderWithTickets, createKitchenTicket, listOnlineOrders, lis
 const { listIngredients, saveIngredient, updateIngredientStock, listRecipes, saveRecipe } = require('./lib/recipe-repository');
 const { createPosSaleAtomically, InsufficientStockError } = require('./lib/pos-sale-repository');
 const { buildOnlineOrderItems } = require('./lib/online-order-catalog');
+const { buildKitchenTicketsForOrder } = require('./lib/online-order-kds');
 const { getStoreSettings, saveStoreSettings, listOperationalRecords, upsertOperationalRecord } = require('./lib/operational-repository');
 const { listReceipts, getHourlyReceiptCounts } = require('./lib/analytics-repository');
 const { validateSyncEvent } = require('./lib/sync-validation');
@@ -1642,15 +1643,26 @@ app.post('/api/online-orders', async (req, res) => {
   // An unpaid web order is not a completed sale: do not create a receipt
   // or record CARD revenue until a payment provider confirms settlement.
 
-  // Generate station tickets without mutating inventory; persist both records atomically.
-  const ticketDb = { ...db, kitchenOrders: [], ingredients: JSON.parse(JSON.stringify(db.ingredients || [])) };
-  processRecipeDepletionAndKDS({
-    id: order.id, orderNumber: order.orderNumber, channel: "WEB",
-    tableNumber: order.tableNumber || order.deliveryType,
-    customerName: order.customerName + (order.customerPhone ? " (" + order.customerPhone + ")" : ""),
-    items: order.items
-  }, ticketDb, { depleteInventory: false });
-  const tickets = ticketDb.kitchenOrders || [];
+  // Generate station tickets from the authoritative catalog and recipes.
+  // In Production, db is intentionally null: load routing data from PostgreSQL,
+  // never from demo defaults or ephemeral files. This path must not deplete stock.
+  let tickets;
+  try {
+    const [recipes, catalogItems] = pgPool
+      ? await Promise.all([listRecipes(pgPool), listPgItems()])
+      : [db.recipes || [], db.items || []];
+    tickets = buildKitchenTicketsForOrder({
+      id: order.id,
+      orderNumber: order.orderNumber,
+      channel: "WEB",
+      tableNumber: order.tableNumber || order.deliveryType,
+      customerName: order.customerName + (order.customerPhone ? " (" + order.customerPhone + ")" : ""),
+      items: order.items
+    }, { recipes, items: catalogItems });
+  } catch (error) {
+    console.error("[DB] Online order KDS routing data read failed:", error.message);
+    return res.status(503).json({ error: "Kitchen routing data is temporarily unavailable. Please retry." });
+  }
   try {
     if (pgPool) await createOnlineOrderWithTickets(pgPool, order, tickets);
     else {

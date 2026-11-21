@@ -98,8 +98,8 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
           CERT_INFO="$("$APKSIGNER" verify --print-certs "$APK" 2>&1)"
-          printf '%s\\n' "$CERT_INFO"
-          ACTUAL_SHA1="$(printf '%s\\n' "$CERT_INFO" | sed -nE 's/.*SHA-1 digest:[[:space:]]*([0-9A-Fa-f:]+).*/\\1/p' | head -n 1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          printf '%s\n' "$CERT_INFO"
+          ACTUAL_SHA1="$(printf '%s\n' "$CERT_INFO" | sed -nE 's/.*SHA-1 digest:[[:space:]]*([0-9A-Fa-f:]+).*/\1/p' | head -n 1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           EXPECTED_SHA1="E616F0ACFEEFB74FFCE76F839A3C13C00D5425B2"
           if [ -z "$ACTUAL_SHA1" ] || [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
             echo "::error::APK signing certificate could not be verified or does not match Firebase."

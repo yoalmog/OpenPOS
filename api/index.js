@@ -1011,11 +1011,12 @@ async function savePgCategory(category) {
 
 async function listPgItems() {
   const result = await pgPool.query(
-    'SELECT id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants::text AS price_variants FROM public.items ORDER BY name'
+    'SELECT id, name, price, category_id, barcode, image_url, color, stock_quantity, station, prep_time_minutes, price_variants::text AS price_variants FROM public.items ORDER BY name'
   );
   return result.rows.map(row => ({
     id: row.id, name: row.name, price: Number(row.price), categoryId: row.category_id,
-    barcode: row.barcode || "", color: row.color === null ? null : Number(row.color),
+    barcode: row.barcode || "", imageUrl: row.image_url || null,
+    color: row.color === null ? null : Number(row.color),
     stockQuantity: Number(row.stock_quantity || 0), station: row.station || "HOT_KITCHEN",
     prepTimeMinutes: Number(row.prep_time_minutes || 5),
     priceVariants: Array.isArray(row.price_variants) ? row.price_variants
@@ -1026,14 +1027,14 @@ async function listPgItems() {
 async function savePgItem(item) {
   await pgPool.query(
     `INSERT INTO items
-      (id, name, price, category_id, barcode, color, stock_quantity, station, prep_time_minutes, price_variants, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
+      (id, name, price, category_id, barcode, image_url, color, stock_quantity, station, prep_time_minutes, price_variants, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
      ON CONFLICT (id) DO UPDATE SET
       name=EXCLUDED.name, price=EXCLUDED.price, category_id=EXCLUDED.category_id,
-      barcode=EXCLUDED.barcode, color=EXCLUDED.color, stock_quantity=EXCLUDED.stock_quantity,
+      barcode=EXCLUDED.barcode, image_url=EXCLUDED.image_url, color=EXCLUDED.color, stock_quantity=EXCLUDED.stock_quantity,
       station=EXCLUDED.station, prep_time_minutes=EXCLUDED.prep_time_minutes,
       price_variants=EXCLUDED.price_variants, updated_at=EXCLUDED.updated_at`,
-    [item.id, item.name, item.price, item.categoryId, item.barcode, item.color,
+    [item.id, item.name, item.price, item.categoryId, item.barcode, item.imageUrl || null, item.color,
       item.stockQuantity, item.station, item.prepTimeMinutes, JSON.stringify(item.priceVariants || []), Date.now()]
   );
 }
@@ -1111,6 +1112,7 @@ app.post('/api/items', requireApiKey, async (req, res) => {
     price: Number(item.price),
     categoryId: item.categoryId || "general",
     barcode: item.barcode || "",
+    imageUrl: typeof item.imageUrl === "string" && (item.imageUrl.trim().startsWith("https://") || item.imageUrl.trim().startsWith("http://")) ? item.imageUrl.trim() : null,
     color: Number(item.color) || -16744448,
     stockQuantity: Number.isFinite(Number(item.stockQuantity)) ? Number(item.stockQuantity) : 100,
     station: item.station || "HOT_KITCHEN",

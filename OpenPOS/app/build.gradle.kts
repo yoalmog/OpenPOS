@@ -16,7 +16,32 @@ android {
         versionName = "1.0"
     }
 
+    val ciDebugKeystore = System.getenv("OPENPOS_DEBUG_KEYSTORE_PATH")
+    val ciDebugStorePassword = System.getenv("OPENPOS_DEBUG_KEYSTORE_PASSWORD")
+    val ciDebugKeyAlias = System.getenv("OPENPOS_DEBUG_KEY_ALIAS") ?: "openpos-debug"
+    val ciDebugKeyPassword = System.getenv("OPENPOS_DEBUG_KEY_PASSWORD") ?: ciDebugStorePassword
+
+    if (!ciDebugKeystore.isNullOrBlank() &&
+        !ciDebugStorePassword.isNullOrBlank() &&
+        !ciDebugKeyPassword.isNullOrBlank()
+    ) {
+        signingConfigs.create("ciDebug") {
+            storeFile = file(ciDebugKeystore)
+            storePassword = ciDebugStorePassword
+            keyAlias = ciDebugKeyAlias
+            keyPassword = ciDebugKeyPassword
+        }
+    }
+
     buildTypes {
+        debug {
+            if (!ciDebugKeystore.isNullOrBlank() &&
+                !ciDebugStorePassword.isNullOrBlank() &&
+                !ciDebugKeyPassword.isNullOrBlank()
+            ) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

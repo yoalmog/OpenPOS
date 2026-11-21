@@ -97,12 +97,14 @@ jobs:
           set -euo pipefail
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
-          ACTUAL_SHA1="$("$APKSIGNER" verify --print-certs "$APK" | awk -F ': ' '/Signer #1 certificate SHA-1 digest:/{print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          CERT_INFO="$("$APKSIGNER" verify --print-certs "$APK" 2>&1)"
+          printf '%s\\n' "$CERT_INFO"
+          ACTUAL_SHA1="$(printf '%s\\n' "$CERT_INFO" | sed -nE 's/.*SHA-1 digest:[[:space:]]*([0-9A-Fa-f:]+).*/\\1/p' | head -n 1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           EXPECTED_SHA1="E616F0ACFEEFB74FFCE76F839A3C13C00D5425B2"
-          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
-            echo "::error::APK was not signed with the expected Firebase certificate."
+          if [ -z "$ACTUAL_SHA1" ] || [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::APK signing certificate could not be verified or does not match Firebase."
             echo "Expected: $EXPECTED_SHA1"
-            echo "Actual:   $ACTUAL_SHA1"
+            echo "Actual:   ${ACTUAL_SHA1:-not detected}"
             exit 1
           fi
           echo "Verified APK SHA-1: $ACTUAL_SHA1"

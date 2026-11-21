@@ -54,15 +54,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Configure Firebase for Android
         env:
-          FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
+          FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
         working-directory: OpenPOS
         run: |
-          if [ -z "$FIREBASE_GOOGLE_SERVICES_JSON" ]; then
-            echo "::error::Missing GitHub Actions secret FIREBASE_GOOGLE_SERVICES_JSON. Add the complete google-services.json contents for Firebase Android app com.openpos.app."
+          if [ -z "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "::error::Missing GitHub Actions secret FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64."
             exit 1
           fi
-          printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" > app/google-services.json
-          jq -e '.project_info.project_id and .client[0].client_info.mobilesdk_app_id' app/google-services.json >/dev/null
+          printf '%s' "$FIREBASE_ANDROID_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+          jq -e '.project_info.project_id and .client[] | select(.client_info.android_client_info.package_name == "com.openpos.app")' app/google-services.json >/dev/null
       - name: Build debug APK
         working-directory: OpenPOS
         run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug

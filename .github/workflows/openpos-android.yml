@@ -48,12 +48,34 @@ jobs:
             exit 1
           fi
 
+      - name: Restore stable Android debug signing key (optional)
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ] && [ -n "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ]; then
+            mkdir -p "$RUNNER_TEMP/openpos-signing"
+            printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/openpos-signing/openpos-debug.keystore"
+            echo "OPENPOS_DEBUG_KEYSTORE_PATH=$RUNNER_TEMP/openpos-signing/openpos-debug.keystore" >> "$GITHUB_ENV"
+            echo "OPENPOS_DEBUG_KEYSTORE_PASSWORD=$ANDROID_DEBUG_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "OPENPOS_DEBUG_KEY_ALIAS=openpos-debug" >> "$GITHUB_ENV"
+            echo "OPENPOS_DEBUG_KEY_PASSWORD=$ANDROID_DEBUG_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "Stable CI signing key restored."
+          else
+            echo "::warning::Stable signing secrets are not configured; this APK uses a temporary runner debug key. Google sign-in SHA-1 may change on the next build."
+          fi
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
+      - name: Build debug APK and report certificate SHA-1
         working-directory: OpenPOS
-        run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/apksigner" verify --print-certs "$APK" | tee "$RUNNER_TEMP/openpos-apk-certificate.txt"
+          echo "Use the certificate SHA-1 above in Firebase Android app settings for com.openpos.app."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

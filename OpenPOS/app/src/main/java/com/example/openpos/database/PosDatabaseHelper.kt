@@ -12,7 +12,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
 
     companion object {
         const val DATABASE_NAME = "openpos_master.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
 
         const val TABLE_CATEGORIES = "categories"
         const val TABLE_ITEMS = "items"
@@ -40,6 +40,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                 price REAL NOT NULL,
                 category_id TEXT NOT NULL,
                 barcode TEXT,
+                image_url TEXT,
                 color INTEGER NOT NULL,
                 stock_quantity INTEGER DEFAULT 100,
                 station TEXT DEFAULT 'HOT_KITCHEN',
@@ -163,6 +164,12 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             } catch (_: Exception) {}
         }
 
+        if (oldVersion < 5) {
+            try {
+                db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN image_url TEXT")
+            } catch (_: Exception) {}
+        }
+
         if (oldVersion < 3) {
             // Add Open Tickets table
             db.execSQL("""
@@ -237,6 +244,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                     put("price", item.price)
                     put("category_id", item.categoryId)
                     put("barcode", item.barcode)
+                    put("image_url", item.imageUrl)
                     put("color", item.color)
                     put("stock_quantity", item.stockQuantity)
                     put("station", item.station)
@@ -269,6 +277,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             val priceIdx = it.getColumnIndexOrThrow("price")
             val catIdx = it.getColumnIndexOrThrow("category_id")
             val barcodeIdx = it.getColumnIndexOrThrow("barcode")
+            val imageUrlIdx = it.getColumnIndex("image_url")
             val colorIdx = it.getColumnIndexOrThrow("color")
             val stockIdx = it.getColumnIndexOrThrow("stock_quantity")
             val stationIdx = it.getColumnIndex("station")
@@ -285,6 +294,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
                         price = it.getDouble(priceIdx),
                         categoryId = it.getString(catIdx),
                         barcode = it.getString(barcodeIdx),
+                        imageUrl = if (imageUrlIdx >= 0 && !it.isNull(imageUrlIdx)) it.getString(imageUrlIdx) else null,
                         color = it.getLong(colorIdx),
                         stockQuantity = it.getInt(stockIdx),
                         station = station,
@@ -317,6 +327,7 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             put("price", item.price)
             put("category_id", item.categoryId)
             put("barcode", item.barcode)
+            put("image_url", item.imageUrl)
             put("color", item.color)
             put("stock_quantity", item.stockQuantity)
             put("station", item.station)

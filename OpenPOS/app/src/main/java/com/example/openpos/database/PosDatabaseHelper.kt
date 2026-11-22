@@ -393,6 +393,24 @@ class PosDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
         db.execSQL("DELETE FROM $TABLE_CATEGORIES")
     }
 
+    /**
+     * Replace the local catalog with the complete cloud snapshot.
+     * Sales, receipts, shifts, inventory movements, and queued events are untouched.
+     */
+    fun replaceCatalog(items: List<Item>, categories: List<Category>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(TABLE_ITEMS, null, null)
+            db.delete(TABLE_CATEGORIES, null, null)
+            categories.forEach { saveCategory(it) }
+            items.forEach { saveItem(it) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     // --- INVENTORY & STOCK AUTOMATION ---
 
     fun deductStock(itemId: String, quantity: Int, reason: String = "SALE"): Int {

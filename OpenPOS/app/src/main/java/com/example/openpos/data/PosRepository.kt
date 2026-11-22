@@ -99,14 +99,11 @@ class PosRepository private constructor(context: Context? = null) {
         // Setup two-way sync catalog receiver
         syncManager?.onCatalogReceived = { serverItems, serverCategories ->
             dbHelper?.let { db ->
-                if (serverCategories.isNotEmpty()) {
-                    serverCategories.forEach { db.saveCategory(it) }
-                    _categories.value = db.getAllCategories()
-                }
-                if (serverItems.isNotEmpty()) {
-                    db.saveItems(serverItems)
-                    _items.value = db.getAllItems()
-                }
+                // The API returns a full authoritative snapshot. Replacing (not upserting)
+                // removes products/categories deleted in Back Office and prevents stale rows.
+                db.replaceCatalog(serverItems, serverCategories)
+                _categories.value = db.getAllCategories()
+                _items.value = db.getAllItems()
             }
         }
     }

@@ -143,8 +143,9 @@ class CloudSyncManager(
                         dbHelper.markEventsAsSynced(ackIds)
                     }
 
-                    // Two-way Catalog Sync (Backend -> Local POS)
-                    if (responseJson.has("items") || responseJson.has("categories")) {
+                    // The sync endpoint always returns a complete catalog snapshot.
+                    // Process empty arrays too, so deleted cloud records are removed locally.
+                    if (responseJson.has("items") && responseJson.has("categories")) {
                         val serverItems = mutableListOf<Item>()
                         val serverCategories = mutableListOf<Category>()
 
@@ -195,10 +196,8 @@ class CloudSyncManager(
                             }
                         }
 
-                        if (serverItems.isNotEmpty() || serverCategories.isNotEmpty()) {
-                            withContext(Dispatchers.Main) {
-                                onCatalogReceived?.invoke(serverItems, serverCategories)
-                            }
+                        withContext(Dispatchers.Main) {
+                            onCatalogReceived?.invoke(serverItems, serverCategories)
                         }
                     }
 

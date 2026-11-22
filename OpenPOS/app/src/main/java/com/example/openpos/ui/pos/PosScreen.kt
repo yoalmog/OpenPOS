@@ -200,7 +200,7 @@ fun PosScreen(
                                     "$pendingSyncCount",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFE65100)
+                                    color = MaterialTheme.colorScheme.tertiary
                                 )
                             }
                         }
@@ -1024,7 +1024,7 @@ fun ItemCard(
                     .fillMaxWidth()
                     .height(76.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFFFF3CC)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -1036,7 +1036,7 @@ fun ItemCard(
                         else -> Icons.Default.Restaurant
                     },
                     contentDescription = null,
-                    tint = Color(0xFF9A7413),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(28.dp)
                 )
                 if (!item.imageUrl.isNullOrBlank()) {
@@ -1579,9 +1579,9 @@ fun ShiftReportDialog(
                                 (if (diff > 0) "+" else "") + currencyFormat.format(diff),
                                 fontWeight = FontWeight.Bold,
                                 color = when {
-                                    diff == 0.0 -> Color(0xFF2E7D32)
+                                    diff == 0.0 -> Color(0xFF10B981)
                                     diff < 0.0 -> MaterialTheme.colorScheme.error
-                                    else -> Color(0xFF1976D2)
+                                    else -> MaterialTheme.colorScheme.primary
                                 }
                             )
                         }
@@ -1787,7 +1787,7 @@ fun ReceiptsHistoryDialog(
                         items(filteredReceipts) { r ->
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (r.isRefund) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surfaceVariant,
+                                color = if (r.isRefund) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { onSelectReceipt(r) }
@@ -1862,7 +1862,7 @@ fun ReceiptDetailsDialog(
                 Icon(
                     if (receipt.isRefund) Icons.Default.Warning else Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = if (receipt.isRefund) MaterialTheme.colorScheme.error else Color(0xFF2E7D32)
+                    tint = if (receipt.isRefund) MaterialTheme.colorScheme.error else Color(0xFF10B981)
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(if (receipt.isRefund) "Refund Transaction" else strings.receiptCompleteTitle)

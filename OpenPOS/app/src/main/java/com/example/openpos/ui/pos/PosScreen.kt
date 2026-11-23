@@ -98,6 +98,8 @@ fun PosScreen(
 
     var activeTab by remember { mutableStateOf(PosTab.CATALOG) }
     var selectedCategoryId by remember { mutableStateOf<String?>(null) }
+    var showFavoritesOnly by remember { mutableStateOf(false) }
+    val favoriteItemIds = remember { mutableStateListOf<String>() }
     var itemForModifierDialog by remember { mutableStateOf<Item?>(null) }
     var itemForVariantDialog by remember { mutableStateOf<Item?>(null) }
     var showPaymentDialog by remember { mutableStateOf(false) }
@@ -119,9 +121,11 @@ fun PosScreen(
     val pendingSyncCount by repository.syncManager?.pendingEventsCount?.collectAsState() ?: remember { mutableStateOf(0) }
     val coroutineScope = rememberCoroutineScope()
 
-    val filteredItems = remember(selectedCategoryId, items) {
-        if (selectedCategoryId == null) items
-        else items.filter { it.categoryId == selectedCategoryId }
+    val filteredItems = remember(selectedCategoryId, items, showFavoritesOnly, favoriteItemIds.toList()) {
+        items.filter { item ->
+            (selectedCategoryId == null || item.categoryId == selectedCategoryId) &&
+                (!showFavoritesOnly || item.id in favoriteItemIds)
+        }
     }
 
     val totalCartItems = cart.sumOf { it.quantity }
@@ -409,9 +413,14 @@ fun PosScreen(
                         items = filteredItems,
                         categories = categories,
                         selectedCategoryId = selectedCategoryId,
+                        currentLanguage = currentLanguage,
+                        showFavoritesOnly = showFavoritesOnly,
+                        favoriteItemIds = favoriteItemIds.toSet(),
                         currencyFormat = currencyFormat,
                         strings = strings,
-                        onSelectCategory = { selectedCategoryId = it },
+                        onSelectCategory = { selectedCategoryId = it; showFavoritesOnly = false },
+                        onToggleFavoritesOnly = { showFavoritesOnly = !showFavoritesOnly; selectedCategoryId = null },
+                        onToggleFavorite = { id -> if (id in favoriteItemIds) favoriteItemIds.remove(id) else favoriteItemIds.add(id) },
                         onAddItem = { showAddProductDialog = true },
                         onItemClick = { item ->
                             when {
@@ -679,9 +688,14 @@ fun CatalogView(
     items: List<Item>,
     categories: List<Category>,
     selectedCategoryId: String?,
+    currentLanguage: AppLanguage,
+    showFavoritesOnly: Boolean,
+    favoriteItemIds: Set<String>,
     currencyFormat: DecimalFormat,
     strings: PosStrings,
     onSelectCategory: (String?) -> Unit,
+    onToggleFavoritesOnly: () -> Unit,
+    onToggleFavorite: (String) -> Unit,
     onAddItem: () -> Unit,
     onItemClick: (Item) -> Unit,
     onItemLongClick: (Item) -> Unit
@@ -746,7 +760,16 @@ fun CatalogView(
                     FilterChip(
                         selected = selectedCategoryId == null,
                         onClick = { onSelectCategory(null) },
-                        label = { Text("All") }
+                        label = { Text(when (currentLanguage) { AppLanguage.SPANISH -> "Todas las categorías"; AppLanguage.HEBREW -> "כל הקטגוריות"; AppLanguage.ARABIC -> "كل الفئات"; else -> "All categories" }) }
+                    )
+                }
+
+                item {
+                    FilterChip(
+                        selected = showFavoritesOnly,
+                        onClick = onToggleFavoritesOnly,
+                        label = { Text(when (currentLanguage) { AppLanguage.SPANISH -> "Favoritos"; AppLanguage.HEBREW -> "מועדפים"; AppLanguage.ARABIC -> "المفضلة"; else -> "Favorites" }) },
+                        leadingIcon = { Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFE7A321)) }
                     )
                 }
 
@@ -835,6 +858,9 @@ fun CatalogView(
                 items(items, key = { it.id }) { item ->
                     ItemCard(
                         item = item,
+                        categoryName = categories.firstOrNull { it.id == item.categoryId }?.name.orEmpty(),
+                        isFavorite = item.id in favoriteItemIds,
+                        onToggleFavorite = { onToggleFavorite(item.id) },
                         currencyFormat = currencyFormat,
                         extraLabel = "+Mod",
                         onClick = { onItemClick(item) },
@@ -992,6 +1018,9 @@ fun CartView(
 @Composable
 fun ItemCard(
     item: Item,
+    categoryName: String,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     currencyFormat: DecimalFormat,
     extraLabel: String,
     onClick: () -> Unit,
@@ -1001,7 +1030,7 @@ fun ItemCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(184.dp)
+            .height(278.dp)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape)
             .combinedClickable(
                 onClick = onClick,
@@ -1022,7 +1051,7 @@ fun ItemCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(76.dp)
+                    .height(116.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -1046,6 +1075,24 @@ fun ItemCard(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    categoryName.uppercase(),
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onToggleFavorite, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Star, contentDescription = "Favorite", tint = if (isFavorite) Color(0xFFE7A321) else MaterialTheme.colorScheme.outlineVariant)
                 }
             }
             Row(
@@ -1124,7 +1171,7 @@ fun ItemCard(
                         Icons.Default.AddCircle,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }

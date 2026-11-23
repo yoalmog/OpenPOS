@@ -991,6 +991,23 @@
         });
         window.openposSupabase = openposSupabase;
 
+        // Android authenticates natively with Google, then hands this page the same
+        // Supabase session through a narrow JavaScript bridge. Desktop/web sign-in
+        // remains unchanged.
+        if (window.OpenPOSAndroid && typeof window.OpenPOSAndroid.getSupabaseSession === 'function') {
+          const nativeSessionJson = window.OpenPOSAndroid.getSupabaseSession();
+          if (nativeSessionJson) {
+            const nativeSession = JSON.parse(nativeSessionJson);
+            if (nativeSession.access_token && nativeSession.refresh_token) {
+              const { error: nativeSessionError } = await openposSupabase.auth.setSession({
+                access_token: nativeSession.access_token,
+                refresh_token: nativeSession.refresh_token
+              });
+              if (nativeSessionError) throw nativeSessionError;
+            }
+          }
+        }
+
         // Attach the current Supabase access token to every same-origin API request.
         const nativeFetch = window.fetch.bind(window);
         window.fetch = async (input, init = {}) => {

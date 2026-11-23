@@ -123,6 +123,20 @@ class SupabaseAuthManager(
         }
     }
 
+    /**
+     * Supplies the already authenticated Supabase session to the embedded Back Office.
+     * The WebView receives only the short-lived access token and refresh token; the
+     * long-term copy remains encrypted in Android Keystore-backed preferences.
+     */
+    fun getWebSessionJson(): String {
+        val accessToken = getValidAccessToken() ?: return "{}"
+        val stored = readSession() ?: return "{}"
+        return JSONObject()
+            .put("access_token", accessToken)
+            .put("refresh_token", stored.optString("refresh_token"))
+            .toString()
+    }
+
     fun hasStoredSession(): Boolean = readSession() != null
 
     fun signOut() {

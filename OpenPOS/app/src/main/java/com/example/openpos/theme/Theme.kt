@@ -59,10 +59,10 @@ private val OpenPosLight = lightColorScheme(
     onErrorContainer = Color(0xFF7F1D1D)
 )
 
-/** Matches the Back Office navy canvas, blue actions, and restrained status colors. */
+/** Matches the light storefront POS: white cards, pale canvas, and blue actions. */
 @Composable
 fun OpenPOSTheme(
-    darkTheme: Boolean = true,
+    darkTheme: Boolean = false,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {

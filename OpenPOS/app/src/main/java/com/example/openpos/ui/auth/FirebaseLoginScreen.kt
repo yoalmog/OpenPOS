@@ -26,13 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.openpos.auth.FirebaseAuthManager
+import com.example.openpos.auth.SupabaseAuthManager
 import kotlinx.coroutines.launch
 
 @Composable
 fun FirebaseLoginScreen(
     activity: Activity,
-    authManager: FirebaseAuthManager,
+    authManager: SupabaseAuthManager,
     initialApiBaseUrl: String,
     onServerUrlChanged: (String) -> Unit,
     onAuthenticated: () -> Unit
@@ -76,6 +76,7 @@ fun FirebaseLoginScreen(
                                 "Enter the secure OpenPOS Production URL (https://...)."
                             }
                             onServerUrlChanged(normalizedServerUrl)
+                            authManager.apiBaseUrl = normalizedServerUrl
                             authManager.signInWithGoogle(activity)
                             onAuthenticated()
                         } catch (exception: Exception) {

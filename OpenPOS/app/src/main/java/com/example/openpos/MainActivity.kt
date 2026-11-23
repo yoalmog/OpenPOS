@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
     LocalizationManager.init(this)
     val repository = PosRepository.getInstance(this)
     val productionServerUrl = "https://openpos.b4u2store.workers.dev"
+    val backOfficeWebUrl = "https://openpos-liart.vercel.app"
     val storedServerUrl = repository.settings.value.syncServerUrl
     if (!storedServerUrl.startsWith("https://")) {
       repository.updateSettings(repository.settings.value.copy(syncServerUrl = productionServerUrl))
@@ -76,7 +77,7 @@ class MainActivity : ComponentActivity() {
               ) { CircularProgressIndicator() }
 
               authenticated -> AndroidBackOfficeScreen(
-                serverUrl = serverUrl,
+                serverUrl = backOfficeWebUrl,
                 authManager = authManager
               )
 
@@ -86,6 +87,7 @@ class MainActivity : ComponentActivity() {
                 initialApiBaseUrl = serverUrl,
                 onServerUrlChanged = { newUrl ->
                   repository.updateSettings(repository.settings.value.copy(syncServerUrl = newUrl))
+                  authManager.apiBaseUrl = newUrl
                 },
                 onAuthenticated = {
                   authenticated = true

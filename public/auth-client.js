@@ -228,6 +228,22 @@
       });
       global.openposSupabase = supabaseClient;
 
+      // Android uses the native Google Credential Manager flow. Restore that exact
+      // Supabase session before the app checks auth state or makes any protected API call.
+      if (global.OpenPOSAndroid && typeof global.OpenPOSAndroid.getSupabaseSession === 'function') {
+        const nativeSessionJson = global.OpenPOSAndroid.getSupabaseSession();
+        if (nativeSessionJson) {
+          const nativeSession = JSON.parse(nativeSessionJson);
+          if (nativeSession.access_token && nativeSession.refresh_token) {
+            const { error: nativeSessionError } = await supabaseClient.auth.setSession({
+              access_token: nativeSession.access_token,
+              refresh_token: nativeSession.refresh_token
+            });
+            if (nativeSessionError) throw nativeSessionError;
+          }
+        }
+      }
+
       installAuthFetchInterceptor(supabaseClient, (expiredMessage) => {
         showLogin(expiredMessage);
       });

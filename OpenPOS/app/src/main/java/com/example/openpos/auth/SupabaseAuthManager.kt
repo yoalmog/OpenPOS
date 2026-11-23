@@ -1,6 +1,18 @@
 package com.example.openpos.auth
 
+import android.app.Activity
 import android.content.Context
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.NoCredentialException
+import com.example.openpos.R
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -29,6 +41,46 @@ class SupabaseAuthManager(
 
     @Volatile private var cachedSupabaseUrl: String? = null
     @Volatile private var cachedAnonKey: String? = null
+
+    suspend fun signInWithGoogle(activity: Activity) {
+        val credentialManager = CredentialManager.create(activity)
+        val serverClientId = activity.getString(R.string.default_web_client_id)
+        require(serverClientId.isNotBlank()) { "Google Web Client ID is missing from the Android configuration." }
+
+        val googleOption = GetGoogleIdOption.Builder()
+            .setServerClientId(serverClientId)
+            .setFilterByAuthorizedAccounts(false)
+            .build()
+        val googleRequest = GetCredentialRequest.Builder()
+            .addCredentialOption(googleOption)
+            .build()
+        val result = try {
+            credentialManager.getCredential(context = activity, request = googleRequest)
+        } catch (_: NoCredentialException) {
+            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId).build()
+            val signInRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(signInOption)
+                .build()
+            credentialManager.getCredential(context = activity, request = signInRequest)
+        }
+
+        val credential = result.credential as? CustomCredential
+            ?: throw IllegalStateException("Google did not return a supported sign-in credential.")
+        require(credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+            "Google returned an unexpected credential type."
+        }
+        val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+        withContext(Dispatchers.IO) {
+            val config = loadConfig()
+            val response = requestJson(
+                "${config.first}/auth/v1/token?grant_type=id_token",
+                "POST",
+                config.second,
+                JSONObject().put("provider", "google").put("id_token", googleIdToken)
+            )
+            saveSession(response)
+        }
+    }
 
     fun signIn(email: String, password: String) {
         require(email.isNotBlank()) { "Email is required." }
@@ -69,6 +121,20 @@ class SupabaseAuthManager(
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Supplies the already authenticated Supabase session to the embedded Back Office.
+     * The WebView receives only the short-lived access token and refresh token; the
+     * long-term copy remains encrypted in Android Keystore-backed preferences.
+     */
+    fun getWebSessionJson(): String {
+        val accessToken = getValidAccessToken() ?: return "{}"
+        val stored = readSession() ?: return "{}"
+        return JSONObject()
+            .put("access_token", accessToken)
+            .put("refresh_token", stored.optString("refresh_token"))
+            .toString()
     }
 
     fun hasStoredSession(): Boolean = readSession() != null

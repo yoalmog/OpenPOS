@@ -102,7 +102,7 @@ class CloudSyncManager(
                 conn.readTimeout = 7000
                 conn.setRequestProperty("Content-Type", "application/json")
                 val accessToken = accessTokenProvider?.invoke()
-                    ?: throw IllegalStateException("Firebase Google sign-in is required before cloud sync.")
+                    ?: throw IllegalStateException("Google sign-in with the OpenPOS Supabase account is required before cloud sync.")
                 conn.setRequestProperty("Authorization", "Bearer $accessToken")
                 conn.doOutput = true
 

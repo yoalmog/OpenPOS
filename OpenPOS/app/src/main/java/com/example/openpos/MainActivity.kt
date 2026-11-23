@@ -19,7 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
-import com.example.openpos.auth.FirebaseAuthManager
+import com.example.openpos.auth.SupabaseAuthManager
 import com.example.openpos.data.PosRepository
 import com.example.openpos.i18n.LocalizationManager
 import com.example.openpos.theme.OpenPOSTheme
@@ -39,8 +39,10 @@ class MainActivity : ComponentActivity() {
     if (!storedServerUrl.startsWith("https://")) {
       repository.updateSettings(repository.settings.value.copy(syncServerUrl = productionServerUrl))
     }
-    val authManager = FirebaseAuthManager()
-    repository.syncManager?.accessTokenProvider = authManager::getValidIdToken
+    val authManager = SupabaseAuthManager(this, repository.settings.value.syncServerUrl)
+    repository.syncManager?.accessTokenProvider = {
+      withContext(Dispatchers.IO) { authManager.getValidAccessToken() }
+    }
 
     enableEdgeToEdge()
     setContent {
@@ -50,7 +52,7 @@ class MainActivity : ComponentActivity() {
 
       LaunchedEffect(authManager) {
         authenticated = withContext(Dispatchers.IO) {
-          authManager.getValidIdToken() != null
+          authManager.getValidAccessToken() != null
         }
         authChecked = true
       }

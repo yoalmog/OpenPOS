@@ -1,6 +1,8 @@
 package com.example.openpos
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -139,7 +141,21 @@ private fun AndroidBackOfficeScreen(
         settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
         addJavascriptInterface(OpenPOSAndroidBridge(authManager), "OpenPOSAndroid")
         webChromeClient = WebChromeClient()
-        webViewClient = WebViewClient()
+        webViewClient = object : WebViewClient() {
+          override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: android.webkit.WebResourceRequest
+          ): Boolean {
+            val target = request.url
+            if (target.scheme == "https" && target.host == "openpos-liart.vercel.app") return false
+            return try {
+              context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.toString())))
+              true
+            } catch (_: Exception) {
+              true
+            }
+          }
+        }
         loadUrl(serverUrl)
       }
     },
